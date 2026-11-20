@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>锋线 · 近代中国战事地图 1840—1949</title>
+<meta name="description" content="从珠江口到鸭绿江：1840 至 1949 年近代中国战事的地理时间轴。点播放，战事依次亮起，行军路线在地图上画出。" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230b141b'/%3E%3Cpath d='M6 24 L16 8 L26 24' stroke='%23e0a03a' stroke-width='2.4' fill='none'/%3E%3Ccircle cx='16' cy='22' r='2.4' fill='%23c9503c'/%3E%3C/svg%3E" />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div id="app">
+  <canvas id="map" aria-label="近代中国战事地图"></canvas>
+  <div class="scrim" aria-hidden="true"></div>
+
+  <!-- ── 左栏：刊头 + 时期索引 ── -->
+  <aside id="rail">
+    <div class="masthead">
+      <div class="mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="26" height="26"><path d="M3 20 L12 4 L21 20" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="18" r="2.1" fill="currentColor"/></svg>
+      </div>
+      <div>
+        <h1>锋线</h1>
+        <p class="sub">近代中国战事地图 · 1840—1949</p>
+      </div>
+    </div>
+
+    <div class="era-now">
+      <span class="era-label" id="era-label">此刻 · 鸦片战争</span>
+      <strong id="era-name">第一次鸦片战争</strong>
+      <div class="node-now">
+        <span id="node-pos" class="nn-pos">1/11</span>
+        <span id="node-title" class="nn-title">英舰队抵珠江口</span>
+      </div>
+      <span class="nn-bar" aria-hidden="true"><i id="node-bar"></i></span>
+      <p id="era-blurb">英军自珠江口北上，直抵南京城下。</p>
+    </div>
+
+    <nav id="eras" aria-label="时期索引"></nav>
+
+    <div class="rail-foot">
+      <button id="btn-about" class="ghost">关于这份图</button>
+      <span class="count"><b id="shown">0</b> / <span id="total">0</span> 条战事</span>
+    </div>
+  </aside>
+
+  <!-- ── 右栏：战事流 ── -->
+  <section id="feed" aria-label="战事流">
+    <header class="feed-head">
+      <h2>战事流</h2>
+      <span class="feed-hint only-narrow">点条目看档案</span>
+    </header>
+    <ol id="feed-list"></ol>
+  </section>
+
+  <!-- ── 底部：时间轴 ── -->
+  <footer id="transport">
+    <div class="transport-main">
+      <button id="btn-play" class="play" aria-label="播放">
+        <svg class="ico-play" viewBox="0 0 24 24" width="20" height="20"><path d="M8 5 L19 12 L8 19 Z" fill="currentColor"/></svg>
+        <svg class="ico-pause" viewBox="0 0 24 24" width="20" height="20"><rect x="7" y="5" width="3.6" height="14" fill="currentColor"/><rect x="13.4" y="5" width="3.6" height="14" fill="currentColor"/></svg>
+      </button>
+
+      <div class="clock">
+        <span id="year-big">1840</span>
+        <span id="month-small">6月</span>
+      </div>
+
+      <div class="scrub-wrap">
+        <div id="density" class="density" role="slider" tabindex="0"
+             aria-label="年份" aria-valuemin="1840" aria-valuemax="1950" aria-valuenow="1840"></div>
+        <div class="ticks" aria-hidden="true"></div>
+      </div>
+
+      <div class="transport-right">
+        <button id="btn-about-narrow" class="ghost only-narrow" aria-label="关于这份图" title="关于这份图">?</button>
+        <button id="btn-feed-toggle" class="ghost only-narrow" aria-expanded="false" aria-controls="feed">战事流</button>
+        <button id="btn-prev" class="step" title="上一场（←）" aria-label="上一场战事">◀</button>
+        <button id="btn-next" class="step" title="下一场（→）" aria-label="下一场战事">▶</button>
+        <button id="btn-speed" class="ghost speed" title="播放速度">1×</button>
+        <button id="btn-reset" class="ghost" title="回到 1840">复位</button>
+      </div>
+    </div>
+  </footer>
+
+  <!-- ── 档案卡 ── -->
+  <article id="dossier" hidden>
+    <button id="dossier-close" class="close" aria-label="关闭">×</button>
+    <div class="dossier-meta">
+      <span id="d-era" class="chip"></span>
+      <span id="d-date" class="date"></span>
+      <span id="d-scale" class="scale"></span>
+    </div>
+    <p id="d-ctx" class="ctx"></p>
+    <h3 id="d-name"></h3>
+    <p id="d-place" class="place"></p>
+    <p id="d-note" class="note"></p>
+    <p id="d-result" class="result"></p>
+  </article>
+
+  <div id="about" class="modal" hidden>
+    <div class="modal-card">
+      <button id="about-close" class="close" aria-label="关闭">×</button>
+      <h2>关于这份图</h2>
+      <p>把 1840—1949 年间的战事按发生时间与地点落到地图上，共 <b id="about-count">—</b> 条，编成 <b id="about-nodes">—</b> 个战役节点。播放时逐节点推进：停在节点上看清楚，再走到下一个节点，行军路线按箭头方向逐步画出。</p>
+      <h3>怎么读</h3>
+      <ul>
+        <li><b>节点</b>是同一阶段发生的一组战事。播放走到一个节点，这一组会一起亮起；左栏显示所属战役与第几节。</li>
+        <li><b>点大小</b>表示规模：小点为局部战斗，中点为战役，大点为决定性会战或转折。</li>
+        <li><b>虚线</b>为海上行动，<b>点划线</b>为撤退转移，<b>实线</b>为陆上推进。</li>
+        <li><b>底部年表尺</b>的柱高是该年战事条数——柱高的地方，就是最密的年份。拖动它会退出节点节拍，按年份自由走。</li>
+      </ul>
+      <h3>边界</h3>
+      <p>底图为现代省界与国界的简化几何，只用于定位，不表示任何历史时期的疆域主张。地名尽量采用当时的称法（如北平、绥远、荷属东印度），但省界本身无法还原到民国时期。</p>
+      <p class="fine">坐标取自事件实际发生地，部分古代地名按今地换算，存在数公里级误差。</p>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="src/app.js"></script>
+</body>
+</html>

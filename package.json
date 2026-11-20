@@ -1,0 +1,10 @@
+{
+  "name": "war-map",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "serve": "python3 -m http.server 4322",
+    "test": "node --test tests/*.test.mjs",
+    "build:geo": "node tools/build-geo.mjs"
+  }
+}
