@@ -1,7 +1,8 @@
 // 地图渲染：全部用 Canvas 2D 手绘，不依赖任何地图瓦片或第三方库。
 // 一个 draw(view, state) 负责整帧；调用方只管在 rAF 里喂 state。
 
-import { createView, lonLatToScreen, toScreenX, toScreenY, screenToLonLat } from "./geo.js";
+import { lonLatToScreen, toScreenX, toScreenY } from "./geo.js";
+import { unitOf, FACTIONS } from "../data/units.js";
 
 // 明度阶梯：海最暗 → 邻国次之 → 中国本土最亮。
 // 三层之间必须一眼分得开，否则邻国陆地会被读成海里的窟窿。
@@ -77,66 +78,82 @@ function shapePaths(ctx, view, shapes, fill, stroke, lineWidth = 1) {
   }
 }
 
-/** 势力范围：按时期给几个大区域刷一层极淡的色，靠颜色而不是文字说话 */
-const SPHERES = [
-  {
-    era: "opium", tint: "56,96,140",
-    zones: [
-      { name: "英军活动", bbox: [110, 20, 123, 33] },
-      { name: "英军北上", bbox: [119, 33, 123, 41] },
-    ],
-  },
-  {
-    era: "taiping", tint: "150,72,60",
-    zones: [
-      { name: "太平天国", bbox: [110, 24, 122, 33] },
-      { name: "清军", bbox: [108, 28, 118, 36] },
-    ],
-  },
-  {
-    era: "jiawu", tint: "150,110,50",
-    zones: [
-      { name: "日军", bbox: [121, 37, 127, 42] },
-      { name: "北洋水师", bbox: [120, 36, 124, 40] },
-    ],
-  },
-  {
-    era: "anti", tint: "176,58,44",
-    zones: [
-      { name: "日军占领", bbox: [108, 30, 122, 42] },
-      { name: "日军占领", bbox: [113, 22, 122, 31] },
-      { name: "日军占领", bbox: [125, 40, 132, 48] },
-    ],
-  },
-];
-
-function drawSpheres(ctx, view, year, eras) {
-  for (const sp of SPHERES) {
-    const era = eras.find((e) => e.id === sp.era);
-    if (!era) continue;
-    if (year < era.from - 0.5 || year > era.to + 0.5) continue;
-    const fade = Math.min(1, Math.min(year - (era.from - 0.5), era.to + 0.5 - year) / 0.6);
-    if (fade <= 0) continue;
-    ctx.save();
-    for (const z of sp.zones) {
-      const [lon0, lat0, lon1, lat1] = z.bbox;
-      const pts = [
-        lonLatToScreen(view, lon0, lat0),
-        lonLatToScreen(view, lon1, lat0),
-        lonLatToScreen(view, lon1, lat1),
-        lonLatToScreen(view, lon0, lat1),
-      ];
-      ctx.beginPath();
-      pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
-      ctx.closePath();
-      const g = ctx.createLinearGradient(0, Math.min(...pts.map((p) => p[1])), 0, Math.max(...pts.map((p) => p[1])));
-      g.addColorStop(0, `rgba(${sp.tint},${0.1 * fade})`);
-      g.addColorStop(1, `rgba(${sp.tint},${0.03 * fade})`);
-      ctx.fillStyle = g;
-      ctx.fill();
-    }
-    ctx.restore();
+/**
+ * 控制区：按省翻色。
+ *
+ * 只在「控制真的变了」的那些省上色，政府方面（gov）就是地形底色、不另画——
+ * 这样第一帧双方都在图上，守方不会从空白里冒出来。
+ * 翻色用进攻方的纯色，不做半透明叠半透明（两个半透明叠出的是浑浊的第三色）。
+ * 刚翻过来的省多给一层亮边，随后褪到常态，读起来才像「这一下是刚打下来的」。
+ */
+function drawControl(ctx, view, base, control) {
+  if (!control || !control.held || !control.held.size) return;
+  if (!base.provinceByName) {
+    base.provinceByName = new Map(base.provinces.map((p) => [p.name, p]));
   }
+  const wave = control.wave || new Map();
+
+  // 画一块省面：fill 是阵营纯色，翻色途中更实一点并带一圈光，翻完落回常态浓度。
+  const paint = (prov, color, a) => {
+    const flipping = a < 1;
+    ctx.globalAlpha = a * (flipping ? 0.66 : 0.46);
+    shapePaths(ctx, view, prov.shapes, color, null, 0);
+    // 再罩一层很淡的地形，留一点起伏，不然整块像贴纸
+    overlayTerrain(ctx, view, base, prov.shapes, 0.22);
+    ctx.globalAlpha = 1;
+    if (flipping) {
+      ctx.save();
+      ctx.globalAlpha = (1 - a) * 0.8;
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 13 * (1 - a);
+      shapePaths(ctx, view, prov.shapes, null, color, 2.2);
+      ctx.restore();
+    } else {
+      shapePaths(ctx, view, prov.shapes, null, color, 1.1);
+    }
+  };
+
+  ctx.save();
+
+  // 零、政府方面的底色：整幅本土先压一层很淡的暖色。
+  // 双方第一帧都该有颜色——政府方面若只是地形原色，读起来像「无人区」，
+  // 而不是「此刻归政府」。这一层很淡，只负责把「有主」讲清楚。
+  const govColor = FACTIONS.gov ? FACTIONS.gov.color : "#dcb45e";
+  ctx.globalAlpha = 0.07;
+  for (const p of base.provinces) shapePaths(ctx, view, p.shapes, govColor, null, 0);
+  ctx.globalAlpha = 1;
+
+  // 一、易手前垫底：另一方的纯色先顶住，新颜色才是在旧颜色上盖过去，
+  // 而不是从地形底色里淡出来（半透明叠半透明会得浑浊的第三色）。
+  for (const [name, w] of wave) {
+    if (w.a >= 1 || w.from === "gov" || w.to === "gov") continue;
+    const prov = base.provinceByName.get(name);
+    if (!prov) continue;
+    paint(prov, FACTIONS[w.from] ? FACTIONS[w.from].color : "#8a9aa4", 1);
+  }
+
+  // 二、被谁占着：控制态里非政府方面的那几省，刚易手的按进度渐入。
+  for (const [name, faction] of control.held) {
+    if (faction === "gov") continue;
+    const prov = base.provinceByName.get(name);
+    if (!prov) continue;
+    const w = wave.get(name);
+    const a = w ? w.a : 1; // 0 还没轮到它，1 已经翻完
+    if (a <= 0) continue;
+    paint(prov, FACTIONS[faction] ? FACTIONS[faction].color : "#8a9aa4", a);
+  }
+
+  // 三、交回政府方面的省：旧颜色淡出，不要瞬间消失。
+  for (const [name, w] of wave) {
+    if (w.a >= 1 || w.to !== "gov" || w.from === "gov") continue;
+    const prov = base.provinceByName.get(name);
+    if (!prov) continue;
+    ctx.globalAlpha = (1 - w.a) * 0.46;
+    shapePaths(ctx, view, prov.shapes, FACTIONS[w.from] ? FACTIONS[w.from].color : "#8a9aa4", null, 0);
+    ctx.globalAlpha = 1;
+  }
+
+  ctx.restore();
 }
 
 function drawGraticule(ctx, view) {
@@ -164,7 +181,48 @@ function drawGraticule(ctx, view) {
   ctx.restore();
 }
 
-function drawBasemap(ctx, view, base) {
+/**
+ * 把离线烘好的地形图贴到给定的多边形路径里。
+ * 图是按整幅 bbox 对齐的（tools/bake-terrain.py 与 geo.js 用同一套投影），
+ * 所以只要把 bbox 四角映射到屏幕矩形，再裁到路径内即可。
+ * 图本身已经是分层设色 + 晕渲，正常混合即可；alpha 用来让邻国退后一层。
+ */
+function overlayTerrain(ctx, view, base, shapes, alpha, wash) {
+  const img = base.terrain;
+  if (!img || !img.complete || !img.naturalWidth) return;
+  const [minX, minY, maxX, maxY] = base.bbox;
+  const x0 = toScreenX(view, minX);
+  const y0 = toScreenY(view, maxY);
+  const w = (maxX - minX) * view.s;
+  const h = (maxY - minY) * view.s;
+  if (w <= 0 || h <= 0) return;
+
+  ctx.save();
+  ctx.beginPath();
+  for (const shape of shapes) for (const ring of shape) {
+    for (let i = 0; i < ring.length; i++) {
+      const [x, y] = ring[i];
+      const sx = toScreenX(view, x);
+      const sy = toScreenY(view, y);
+      if (i === 0) ctx.moveTo(sx, sy);
+      else ctx.lineTo(sx, sy);
+    }
+    ctx.closePath();
+  }
+  ctx.clip("evenodd");
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.globalAlpha = alpha;
+  ctx.drawImage(img, x0, y0, w, h);
+  if (wash) {
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = wash;
+    ctx.fillRect(0, 0, view.width, view.height);
+  }
+  ctx.restore();
+}
+
+function drawBasemap(ctx, view, base, control) {
   const { width, height } = view;
   const g = ctx.createLinearGradient(0, 0, 0, height);
   g.addColorStop(0, C.seaDeep);
@@ -174,12 +232,26 @@ function drawBasemap(ctx, view, base) {
 
   drawGraticule(ctx, view);
 
+  // 邻国：先铺一层压暗的地形，让境外也有地貌，但明显退到本土之后
   for (const n of base.neighbors) {
-    shapePaths(ctx, view, n.shapes, C.neighbor, C.neighborEdge, 1);
+    shapePaths(ctx, view, n.shapes, C.neighbor, null, 0);
   }
+  overlayTerrain(ctx, view, base, base.neighbors.flatMap((n) => n.shapes), 0.5, "rgba(9,22,31,0.52)");
+  for (const n of base.neighbors) {
+    shapePaths(ctx, view, n.shapes, null, C.neighborEdge, 1);
+  }
+
+  // 本土：地形自己就是底色，只在图片没加载出来时退回纯色
   for (const p of base.provinces) {
-    shapePaths(ctx, view, p.shapes, C.land, C.border, 1);
+    shapePaths(ctx, view, p.shapes, C.land, null, 0);
   }
+  overlayTerrain(ctx, view, base, base.provinces.flatMap((p) => p.shapes), 1);
+  // 控制区压在省界之下：色块是「谁占着」，界线是「省在哪」，两层不能互相盖住
+  drawControl(ctx, view, base, control);
+  for (const p of base.provinces) {
+    shapePaths(ctx, view, p.shapes, null, C.border, 1);
+  }
+
   // 国界单独描一道暖色，让「中国」从邻国里立起来
   if (base.outline) {
     ctx.save();
@@ -211,7 +283,16 @@ function drawPlaceLabels(ctx, view, base, zoom, avoid, dots) {
   ctx.textBaseline = "middle";
   const hit = (list, x, y, hw, hh) => !!list && list.some(([ax, ay]) => Math.abs(ax - x) < hw && Math.abs(ay - y) < hh);
   // 只有高亮那个大圆环会让地名挪开；普通小点靠描边压住，不让字忽隐忽现
-  const clear = (x, y, name) => !hit(avoid, x, y, ctx.measureText(name).width / 2 + 11, 14);
+  const clear = (x, y, name) => {
+    const hw = ctx.measureText(name).width / 2 + 11;
+    // 只画完整落得进空闲区的字——半截字比没有字更难看
+    if (Number.isFinite(view.freeLeft)) {
+      if (x - hw < view.freeLeft + 2) return false;
+      if (x + hw > view.freeLeft + view.freeW - 2) return false;
+      if (y < view.freeTop + 10 || y > view.freeTop + view.freeH - 10) return false;
+    }
+    return !hit(avoid, x, y, hw, 14);
+  };
   // 描一层底色再写字，压在圆点或国界上也读得出来
   const put = (name, x, y) => {
     ctx.strokeStyle = "rgba(7,20,28,0.62)";
@@ -255,7 +336,7 @@ function drawPlaceLabels(ctx, view, base, zoom, avoid, dots) {
 }
 
 /** 箭头：曲线 + 箭头头部，按 progress 逐段画出 */
-function drawArrow(ctx, view, arrow, progress, alpha, tint) {
+function drawArrow(ctx, view, arrow, progress, alpha, tint, weight = 1) {
   const pts = arrow.pts.map(([lon, lat]) => lonLatToScreen(view, lon, lat));
   if (pts.length < 2 || progress <= 0) return;
 
@@ -288,7 +369,7 @@ function drawArrow(ctx, view, arrow, progress, alpha, tint) {
   ctx.save();
   ctx.globalAlpha = alpha;
   ctx.strokeStyle = tint;
-  ctx.lineWidth = arrow.kind === "naval" ? 2 : 2.4;
+  ctx.lineWidth = (arrow.kind === "naval" ? 2 : 2.4) * weight;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   if (arrow.kind === "naval") ctx.setLineDash([7, 5]);
@@ -313,7 +394,7 @@ function drawArrow(ctx, view, arrow, progress, alpha, tint) {
   const last = path[path.length - 1];
   const prev = path[path.length - 2];
   const ang = Math.atan2(last[1] - prev[1], last[0] - prev[0]);
-  const head = arrow.kind === "naval" ? 7 : 9;
+  const head = (arrow.kind === "naval" ? 7 : 9) * weight;
   ctx.fillStyle = tint;
   ctx.beginPath();
   ctx.moveTo(last[0], last[1]);
@@ -323,7 +404,7 @@ function drawArrow(ctx, view, arrow, progress, alpha, tint) {
   ctx.closePath();
   ctx.fill();
 
-  if (arrow.label && progress > 0.55) {
+  if (arrow.label && progress > 0.55 && weight >= 1) {
     ctx.globalAlpha = alpha * Math.min(1, (progress - 0.55) / 0.3);
     ctx.font = "500 11px ui-sans-serif, system-ui, sans-serif";
     ctx.textAlign = "center";
@@ -349,16 +430,91 @@ function drawUnborn(ctx, view, all, revealedCount, zoom) {
   ctx.restore();
 }
 
-/** 战事点位：圆点 + 呼吸光环；scale 决定大小 */
+/**
+ * 兵种符号：一个小方框里画不同记号，颜色由阵营决定。
+ * 尺寸随 scale 与 zoom 缩放；所有形状都按「以原点为中心、边长 2r」绘制，
+ * 调用方先把坐标平移到点位。
+ */
+function unitGlyph(ctx, arm, r, color, weight) {
+  ctx.lineWidth = weight;
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+
+  if (arm === "inf") {
+    // 步兵：方框内打叉
+    const s = r * 0.86;
+    ctx.rect(-s, -s * 0.74, s * 2, s * 1.48);
+    ctx.moveTo(-s, -s * 0.74);
+    ctx.lineTo(s, s * 0.74);
+    ctx.moveTo(s, -s * 0.74);
+    ctx.lineTo(-s, s * 0.74);
+    ctx.stroke();
+    return;
+  }
+  if (arm === "cav") {
+    // 骑兵：方框内一道斜线
+    const s = r * 0.86;
+    ctx.rect(-s, -s * 0.74, s * 2, s * 1.48);
+    ctx.moveTo(-s, -s * 0.74);
+    ctx.lineTo(s, s * 0.74);
+    ctx.stroke();
+    return;
+  }
+  if (arm === "nav") {
+    // 舰队：船体（下窄上宽的梯形）+ 桅杆
+    const s = r * 0.95;
+    ctx.moveTo(-s, s * 0.18);
+    ctx.lineTo(s, s * 0.18);
+    ctx.lineTo(s * 0.5, s * 0.86);
+    ctx.lineTo(-s * 0.5, s * 0.86);
+    ctx.closePath();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(0, s * 0.18);
+    ctx.lineTo(0, -s * 0.9);
+    ctx.stroke();
+    return;
+  }
+  if (arm === "fort") {
+    // 炮台：五边形棱堡 + 中心点
+    const s = r * 0.95;
+    for (let i = 0; i < 5; i++) {
+      const a = -Math.PI / 2 + (i * Math.PI * 2) / 5;
+      const px = Math.cos(a) * s;
+      const py = Math.sin(a) * s;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(0, 0, s * 0.26, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+  // 政治事件：空心圆 + 中心点，不当成部队
+  const s = r * 0.9;
+  ctx.arc(0, 0, s, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(0, 0, s * 0.3, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+/** 战事点位：兵种符号 + 阵营色；scale 决定大小，刚点亮时有涟漪 */
 function drawEventDots(ctx, view, list, player, stamp, activeSet, zoom, labelId) {
+  const labels = [];
   ctx.save();
   for (const e of list) {
     const [x, y] = lonLatToScreen(view, e.at[0], e.at[1]);
     if (x < -60 || y < -60 || x > view.width + 60 || y > view.height + 60) continue;
     const fresh = player.freshness(e.id, stamp, 1600);
     const isActive = activeSet.has(e.id);
-    const baseR = (e.scale === 3 ? 5.4 : e.scale === 2 ? 4 : 3) * (zoom > 1.4 ? 1.15 : 1);
+    const unit = unitOf(e.id);
     const tint = ERA_TINT[e.era] || "150,160,170";
+    const color = unit ? unit.color : `rgb(${tint})`;
+    const baseR = (e.scale === 3 ? 7 : e.scale === 2 ? 5.6 : 4.4) * (zoom > 1.4 ? 1.1 : 1);
 
     if (fresh < 1) {
       // 刚点亮：一圈扩散的涟漪
@@ -372,31 +528,59 @@ function drawEventDots(ctx, view, list, player, stamp, activeSet, zoom, labelId)
 
     if (isActive) {
       ctx.beginPath();
-      ctx.arc(x, y, baseR + 9, 0, Math.PI * 2);
+      ctx.arc(x, y, baseR + 8, 0, Math.PI * 2);
       ctx.strokeStyle = "rgba(224,160,58,0.9)";
       ctx.lineWidth = 1.4;
       ctx.stroke();
     }
 
-    ctx.beginPath();
-    ctx.arc(x, y, baseR * (fresh < 1 ? 0.6 + 0.4 * fresh : 1), 0, Math.PI * 2);
-    ctx.fillStyle = isActive ? C.accent : `rgb(${tint})`;
-    ctx.fill();
-    ctx.strokeStyle = "rgba(10,18,24,0.85)";
-    ctx.lineWidth = 1.2;
-    ctx.stroke();
+    const grow = fresh < 1 ? 0.6 + 0.4 * fresh : 1;
+    ctx.save();
+    ctx.translate(x, y);
+    // 深色描边打底：符号压在浅色高原或深色海面上都得读得出来
+    ctx.save();
+    ctx.globalAlpha = 0.72;
+    unitGlyph(ctx, unit ? unit.arm : "pol", baseR * grow + 1.6, "rgba(8,16,22,0.9)", 3.4);
+    ctx.restore();
+    // 高亮时提亮阵营色而不是换成琥珀——否则一点亮就丢了「这是谁」
+    unitGlyph(ctx, unit ? unit.arm : "pol", baseR * grow, isActive ? boost(color) : color, e.scale === 3 ? 1.9 : 1.5);
+    ctx.restore();
 
-    // 一个节点里可能并排两三条战事，只给其中一条挂名字；否则两行字会叠在一起看不清
-    const showLabel = e.scale === 3 && (isActive ? e.id === labelId : zoom > 1.5);
-    if (showLabel) {
-      ctx.font = "600 11px ui-sans-serif, system-ui, sans-serif";
-      ctx.textAlign = "left";
-      ctx.textBaseline = "middle";
-      ctx.fillStyle = isActive ? C.ink : "rgba(214,228,236,0.72)";
-      ctx.fillText(e.name, x + baseR + 6, y);
-    }
+    // 名字放进第二趟画：先占位的先赢，压不到别人身上
+    if (e.scale === 3) labels.push({ e, x, y, r: baseR, hot: isActive && e.id === labelId });
+  }
+
+  // 高亮的那条优先，然后按 zoom 决定其余大事件要不要挂名字
+  labels.sort((a, b) => Number(b.hot) - Number(a.hot));
+  ctx.font = "600 11px ui-sans-serif, system-ui, sans-serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  const placed = [];
+  for (const it of labels) {
+    if (!it.hot && zoom <= 1.5) continue;
+    const w = ctx.measureText(it.e.name).width + 8;
+    const lx = it.x + it.r + 6;
+    const ly = it.y;
+    const box = [lx, ly - 8, lx + w, ly + 8];
+    if (placed.some((b) => box[0] < b[2] && box[2] > b[0] && box[1] < b[3] && box[3] > b[1])) continue;
+    placed.push(box);
+    ctx.strokeStyle = "rgba(7,20,28,0.72)";
+    ctx.lineWidth = 2.8;
+    ctx.lineJoin = "round";
+    ctx.strokeText(it.e.name, lx, ly);
+    ctx.fillStyle = it.hot ? C.ink : "rgba(214,228,236,0.78)";
+    ctx.fillText(it.e.name, lx, ly);
   }
   ctx.restore();
+}
+
+/** 提亮一个 #rrggbb 颜色：往白里掺 30%，用于高亮态 */
+function boost(hex) {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex);
+  if (!m) return hex;
+  const n = parseInt(m[1], 16);
+  const mix = (v) => Math.round(v + (255 - v) * 0.3);
+  return `rgb(${mix((n >> 16) & 255)},${mix((n >> 8) & 255)},${mix(n & 255)})`;
 }
 
 /** 正在播放的那一年、那个方向：一条从上一个战事连到当前战事的「锋线」 */
@@ -420,17 +604,86 @@ function drawFront(ctx, view, list, year, eras) {
   ctx.restore();
 }
 
+/** 把绘制裁到面板围出来的空闲区：地图可以铺到半透明面板底下，文字和符号不行 */
+function clipFree(ctx, view) {
+  if (!Number.isFinite(view.freeLeft) || !Number.isFinite(view.freeTop)) return;
+  ctx.beginPath();
+  ctx.rect(view.freeLeft, view.freeTop, view.freeW, view.freeH);
+  ctx.clip();
+}
+
+/**
+ * 图例：兵种形状 + 阵营色，钉在空闲区左下角。
+ * 用和地图上完全相同的 unitGlyph 画，图例和实际符号不会走样。
+ */
+function drawLegend(ctx, view) {
+  if (!Number.isFinite(view.freeLeft) || view.freeW < 520 || view.freeH < 360) return;
+  const arms = [["inf", "步兵"], ["cav", "骑兵"], ["nav", "舰队"], ["fort", "炮台"], ["pol", "事件"]];
+  const factions = [["gov", "中国"], ["rev", "革命"], ["jp", "日本"], ["west", "列强"], ["ru", "俄国"]];
+  const cellW = 52;
+  const cellH = 26;
+  const w = arms.length * cellW + 16;
+  const h = cellH * 2 + 12;
+  // 钉在右下角：左下角是档案卡的位置，图例别被它盖住
+  const x0 = view.freeLeft + view.freeW - 16 - w;
+  const y0 = view.freeTop + view.freeH - 16 - h;
+
+  ctx.save();
+  ctx.fillStyle = "rgba(8,15,21,0.86)";
+  ctx.strokeStyle = "rgba(150,182,198,0.16)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.roundRect(x0, y0, w, h, 3);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.font = "500 10px ui-sans-serif, system-ui, sans-serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+
+  // 兵种：画的是地图上那个符号本身
+  arms.forEach(([arm, name], i) => {
+    const cx = x0 + 8 + i * cellW + 7;
+    const cy = y0 + 6 + cellH * 0.5;
+    ctx.save();
+    ctx.translate(cx, cy);
+    unitGlyph(ctx, arm, 4.6, "rgba(196,218,224,0.72)", 1.3);
+    ctx.restore();
+    ctx.fillStyle = "rgba(196,218,224,0.6)";
+    ctx.fillText(name, cx + 11, cy);
+  });
+
+  // 阵营：方块色 + 名字
+  factions.forEach(([f, name], i) => {
+    const cx = x0 + 8 + i * cellW;
+    const cy = y0 + 6 + cellH * 1.5;
+    ctx.fillStyle = FACTIONS[f].color;
+    ctx.globalAlpha = 0.9;
+    ctx.beginPath();
+    ctx.roundRect(cx + 1, cy - 4, 8, 8, 1);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = "rgba(196,218,224,0.6)";
+    ctx.fillText(name, cx + 13, cy);
+  });
+  ctx.restore();
+}
+
 export function draw(ctx, view, state) {
   const { base, events, eras, year, player, stamp, zoom = 1 } = state;
   const activeSet = state.activeIds instanceof Set ? state.activeIds : new Set(state.activeIds || []);
   const revealed = state.revealed;
+  ctx.clearRect(0, 0, view.width, view.height);
+  drawBasemap(ctx, view, base, state.control);
+
+  // 以下全部是「信息层」，一律裁到空闲区，免得字压在战事流面板上
+  ctx.save();
+  clipFree(ctx, view);
+
   // 高亮点附近的地名让位——「朝鲜」压在鸭绿江的圆点上就没法读了
   const avoid = revealed
     .filter((e) => activeSet.has(e.id))
     .map((e) => lonLatToScreen(view, e.at[0], e.at[1]));
-  ctx.clearRect(0, 0, view.width, view.height);
-  drawBasemap(ctx, view, base);
-  drawSpheres(ctx, view, year, eras);
   const dots = revealed.map((e) => lonLatToScreen(view, e.at[0], e.at[1]));
   drawPlaceLabels(ctx, view, base, zoom, avoid, dots);
 
@@ -460,25 +713,46 @@ export function draw(ctx, view, state) {
   let labelId = null;
   for (const e of revealed) if (activeSet.has(e.id)) labelId = e.id;
 
-  // 箭头只画「当前时期」的最近 6 条，加上当前节点上的与正在查看的那条。
-  // 若按全场最近 6 条来画，1876 年收复乌鲁木齐那种横贯新疆的长箭头会一直挂在 1911 年的图上。
-  const curEra = eras.find((e) => year >= e.from && year <= e.to);
-  const withArrows = revealed
-    .filter((e) => e.arrows && e.arrows.length && curEra && e.era === curEra.id)
-    .slice(-6);
-  for (const e of revealed) {
-    if (activeSet.has(e.id) && e.arrows && e.arrows.length && !withArrows.includes(e)) withArrows.push(e);
-  }
-  for (const e of withArrows) {
-    const hot = activeSet.has(e.id);
-    const fade = player.freshness(e.id, stamp, 2600);
-    const alpha = hot ? 0.95 : 0.42 + 0.4 * (1 - fade);
+  // ── 箭头瘦身 ──
+  // 只画「此刻正在发生」的机动：当前节点上的箭头，加一条上一节点的残影。
+  // 满屏箭头读起来像所有机动的示意图，等于什么也没说（这也是同类作品最常见的败笔）。
+  const activeArrows = revealed.filter((e) => activeSet.has(e.id) && e.arrows && e.arrows.length);
+  const residArrows = revealed.filter((e) => !activeSet.has(e.id) && e.arrows && e.arrows.length).slice(-1);
+
+  // 上一节点的箭头只留一点痕迹，指个方向就走
+  for (const e of residArrows) {
     for (const a of e.arrows) {
-      drawArrow(ctx, view, a, fade < 1 ? fade : 1, alpha, hot ? C.accent : `rgba(${ERA_TINT[e.era] || "150,160,170"},0.9)`);
+      drawArrow(ctx, view, a, 1, 0.2, `rgba(${ERA_TINT[e.era] || "150,160,170"},0.9)`);
     }
   }
 
+  // 当前节点里最长的那条「推进」当主箭头领跑：先它一条，其余跟在后头压细
+  const flat = [];
+  for (const e of activeArrows) for (const a of e.arrows) flat.push({ e, a });
+  const span = (a) => {
+    const p = a.pts.map(([lon, lat]) => lonLatToScreen(view, lon, lat));
+    let t = 0;
+    for (let i = 1; i < p.length; i++) t += Math.hypot(p[i][0] - p[i - 1][0], p[i][1] - p[i - 1][1]);
+    return t;
+  };
+  let lead = null;
+  for (const it of flat) {
+    if (it.a.kind !== "advance") continue;
+    if (!lead || span(it.a) > span(lead.a)) lead = it;
+  }
+  if (!lead && flat.length) lead = flat[0];
+
+  for (const it of flat) {
+    const isLead = it === lead;
+    const fade = player.freshness(it.e.id, stamp, 2600);
+    // 箭头先到、目标后亮：让两者不同时发生，因果才读得出来
+    const grow = Math.min(1, fade / 0.6);
+    drawArrow(ctx, view, it.a, grow, isLead ? 0.95 : 0.44, isLead ? C.accent : `rgba(${ERA_TINT[it.e.era] || "150,160,170"},0.9)`, isLead ? 1 : 0.62);
+  }
+
   drawEventDots(ctx, view, revealed, player, stamp, activeSet, zoom, labelId);
+  drawLegend(ctx, view);
+  ctx.restore();
 }
 
 export { ERA_TINT, C as COLORS };

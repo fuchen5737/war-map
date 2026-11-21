@@ -1,2 +1,6 @@
 node_modules/
 .DS_Store
+
+# 地形瓦片缓存（AWS Terrarium 原始数据，51 MB）——用 tools/bake-terrain.py 重新下载即可
+data/geo/raw/terrain-tiles/
+tools/__pycache__/

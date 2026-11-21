@@ -55,13 +55,14 @@ export function createView(bbox, width, height, zoom = 1, panX = 0, panY = 0) {
  * 带内边距的视图：地图只在「左栏右缘 — 右栏左缘 — 底部时间轴上缘」围出的
  * 空闲区域里铺开，不被面板压住。inset 单位为像素。
  */
-export function createInsetView(bbox, width, height, inset = {}, zoom = 1) {
+export function createInsetView(bbox, width, height, inset = {}, zoom = 1, focus = null) {
   const { left = 0, right = 0, top = 0, bottom = 0 } = inset;
   const freeW = Math.max(80, width - left - right);
   const freeH = Math.max(80, height - top - bottom);
   const [minX, minY, maxX, maxY] = bbox;
-  const cx = (minX + maxX) / 2;
-  const cy = (minY + maxY) / 2;
+  // focus 是地图坐标里的镜头中心；不给就退回整个视域的中心
+  const cx = focus ? focus[0] : (minX + maxX) / 2;
+  const cy = focus ? focus[1] : (minY + maxY) / 2;
   const s = Math.min(freeW / (maxX - minX), freeH / (maxY - minY)) * zoom;
   const freeCx = left + freeW / 2;
   const freeCy = top + freeH / 2;
@@ -73,6 +74,8 @@ export function createInsetView(bbox, width, height, inset = {}, zoom = 1) {
     height,
     freeW,
     freeH,
+    freeLeft: left,
+    freeTop: top,
   };
 }
 

@@ -2,9 +2,11 @@
 // 结构上分成三块：地图（canvas）、时间轴（transport）、战事流（feed）。
 
 import { EVENTS, ERAS, TIMELINE } from "../data/events.js";
-import { createInsetView, lonLatToScreen } from "./geo.js";
+import { unitOf } from "../data/units.js";
+import { createInsetView, lonLatToScreen, project } from "./geo.js";
 import { draw, ERA_TINT } from "./render.js";
 import { NODES, createNodePlayer, nodeIndexAtYear, nextNodeIndex, prevNodeIndex } from "./nodes.js";
+import { buildControlSteps, controlAt, waveOrder, waveAlpha } from "./control.js";
 import {
   sortByYear, yearOf, revealedAt, revealedCount,
   formatYear, densityByYear,
@@ -36,6 +38,14 @@ const state = {
 
 let base = null;
 let view = null;
+// 控制区：逐节点的累计态，启动时算一次（纯本地计算，145 节 × 33 省）
+let controlSteps = null;
+// 版面几何：resize 时量一次，镜头每帧只改 zoom/focus，不重复量 DOM
+let layout = { w: 0, h: 0, inset: { left: 0, right: 0, top: 0, bottom: 0 } };
+
+// 镜头：焦点在「地图坐标」里，缩放 1 为整幅视域。
+// 播放时跟着节点走——停在哪个战区，就把哪块推到眼前；用户一旦自己滚轮，就交还控制权。
+const camera = { fx: 0, fy: 0, zoom: 1, rect: null, manual: false, armed: false };
 const canvas = $("map");
 const ctx = canvas.getContext("2d");
 let dpr = 1;
@@ -62,13 +72,144 @@ function insets(rect) {
   };
 }
 
+function buildView() {
+  return createInsetView(base.bbox, layout.w, layout.h, layout.inset, camera.zoom, [camera.fx, camera.fy]);
+}
+
 function resize() {
   const rect = canvas.getBoundingClientRect();
   dpr = Math.min(window.devicePixelRatio || 1, 2);
   canvas.width = Math.round(rect.width * dpr);
   canvas.height = Math.round(rect.height * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  view = createInsetView(base.bbox, rect.width, rect.height, insets(rect), state.zoom);
+  layout = { w: rect.width, h: rect.height, inset: insets(rect) };
+  if (!camera.fx && !camera.fy) {
+    const [minX, minY, maxX, maxY] = base.bbox;
+    camera.fx = (minX + maxX) / 2;
+    camera.fy = (minY + maxY) / 2;
+  }
+  view = buildView();
+}
+
+/**
+ * 节点对应的「战区」：这一组战事在地图坐标里的外接矩形。
+ * 单个战事也给一块最小范围，否则镜头会推到极限、只剩一个点。
+ */
+function cameraRectFor(node) {
+  if (!node || !node.events.length) return null;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const e of node.events) {
+    const [x, y] = project(e.at[0], e.at[1]);
+    x0 = Math.min(x0, x); y0 = Math.min(y0, y);
+    x1 = Math.max(x1, x); y1 = Math.max(y1, y);
+  }
+  const MIN = 0.055;
+  return {
+    cx: (x0 + x1) / 2,
+    cy: (y0 + y1) / 2,
+    dx: Math.max(MIN, x1 - x0),
+    dy: Math.max(MIN, y1 - y0),
+  };
+}
+
+/**
+ * 让镜头看向某个节点。两条纪律：
+ * 1. 播放中、且还在同一场战役里，镜头不动——翻色的时候再让画面平移，两种运动同时看不过来；
+ * 2. 用户自己缩放过（camera.manual）就不抢镜头，直到复位或点时期索引。
+ */
+/** 用户一动，镜头才开始自动跟随——开机先给一张整幅全景 */
+function armCamera() {
+  camera.armed = true;
+}
+
+function aimAt(node) {
+  if (!node) {
+    camera.rect = null;
+    camera.campaign = null;
+    return;
+  }
+  const sameCampaign = node.campaignId === camera.campaign;
+  camera.campaign = node.campaignId;
+  if (sameCampaign && player.playing) return;
+  camera.rect = cameraRectFor(node);
+}
+
+/** 镜头目标：把战区装进空闲区的 2/3，缩放夹在 1—2.6 之间 */
+function cameraGoal() {
+  const t = camera.rect;
+  if (!t || camera.manual) return null;
+  const { w, h, inset } = layout;
+  const freeW = Math.max(80, w - inset.left - inset.right);
+  const freeH = Math.max(80, h - inset.top - inset.bottom);
+  const [minX, minY, maxX, maxY] = base.bbox;
+  const sBase = Math.min(freeW / (maxX - minX), freeH / (maxY - minY));
+  const want = Math.min((freeW * 0.66) / t.dx, (freeH * 0.66) / t.dy);
+  const zoom = Math.max(1, Math.min(2.2, want / sBase));
+  // 缩到 1 时焦点必须回到整幅中心，否则会露出视域外的空白
+  const k = Math.max(0, Math.min(1, (zoom - 1) / 0.55));
+  const cx0 = (minX + maxX) / 2;
+  const cy0 = (minY + maxY) / 2;
+  let fx = cx0 + (t.cx - cx0) * k;
+  let fy = cy0 + (t.cy - cy0) * k;
+  // 焦点夹在视域内：推到广东也别让半个屏幕漂在视域外的空海上
+  const halfW = freeW / sBase / zoom / 2;
+  const halfH = freeH / sBase / zoom / 2;
+  fx = Math.min(maxX - halfW, Math.max(minX + halfW, fx));
+  fy = Math.min(maxY - halfH, Math.max(minY + halfH, fy));
+  if (!(maxX - minX > halfW * 2)) fx = cx0;
+  if (!(maxY - minY > halfH * 2)) fy = cy0;
+  return { fx, fy, zoom };
+}
+
+/** 每帧把镜头推向目标；prefers-reduced-motion 时直接落位 */
+function stepCamera(dt) {
+  if (!camera.armed) return;
+  const goal = cameraGoal();
+  if (!goal) return;
+  const k = reduceMotion.matches ? 1 : Math.min(1, dt * 3.2);
+  const nz = camera.zoom + (goal.zoom - camera.zoom) * k;
+  const nx = camera.fx + (goal.fx - camera.fx) * k;
+  const ny = camera.fy + (goal.fy - camera.fy) * k;
+  const moved = Math.abs(nz - camera.zoom) > 1e-4 || Math.abs(nx - camera.fx) > 1e-5 || Math.abs(ny - camera.fy) > 1e-5;
+  if (!moved) return;
+  camera.zoom = nz;
+  camera.fx = nx;
+  camera.fy = ny;
+  view = buildView();
+}
+
+/* ───────────────────────── 控制区 ───────────────────────── */
+
+/** 省名 → 投影坐标，用于「离战事近的省先翻」 */
+function provincePoints() {
+  const m = new Map();
+  for (const p of base.provinces) if (p.label) m.set(p.name, p.label);
+  return m;
+}
+
+let pointsCache = null;
+
+/**
+ * 本帧的控制区：累计态 + 刚翻色的省各自的热度。
+ * 只有当前节点真的改变了控制，才有「波」；其余时候热度全 0，颜色静静待着。
+ */
+function controlState() {
+  if (!controlSteps) return null;
+  const i = Math.max(0, Math.min(controlSteps.length - 1, player.index));
+  const held = controlAt(controlSteps, i);
+  const wave = new Map();
+  const step = controlSteps[i];
+  if (step && step.changes) {
+    if (!pointsCache) pointsCache = provincePoints();
+    const order = waveOrder(step.changes, NODES[i], pointsCache);
+    // 只有正在播的那一节才有「刚刚发生」；暂停、拖年表尺时一律给终态，
+    // 否则停在节点上会看到一堆还没翻色的省，像是漏了。
+    const t = player.mode === "node" && player.playing ? player.dwellProgress : 1;
+    for (const w of order) {
+      wave.set(w.province, { a: waveAlpha(w.delay, t), from: w.from, to: w.to });
+    }
+  }
+  return { held, wave };
 }
 
 /* ───────────────────────── 渲染循环 ───────────────────────── */
@@ -89,6 +230,7 @@ function frame(now) {
     if (!player.playing) setPlaying(false);
   }
   syncNodeBar();
+  stepCamera(dt);
 
   draw(ctx, view, {
     base,
@@ -99,7 +241,8 @@ function frame(now) {
     player,
     stamp: now,
     activeIds: state.activeIds,
-    zoom: state.zoom,
+    zoom: camera.zoom,
+    control: controlState(),
   });
 
   requestAnimationFrame(frame);
@@ -168,6 +311,7 @@ function goNode(k, opts = {}) {
   state.activeIds = n.events.map((e) => e.id);
   syncClock(state.year);
   syncNow();
+  aimAt(n);
   if (opts.rebuild !== false) rebuildFeed(n);
   if (opts.dossier) showDossier(n.events[n.events.length - 1], { node: n });
   if (opts.rebuild !== false) markActive(n.id);
@@ -180,6 +324,7 @@ function enterNode(n, opts = {}) {
   state.activeIds = n.events.map((e) => e.id);
   pushFeedNode(n, opts.animate);
   markActive(n.id);
+  aimAt(n);
   // 窄屏地图本来就小，播放时弹卡片会盖住刚亮起来的点；左栏已经写着这一节是什么了
   if (!narrow.matches) showDossier(n.events[n.events.length - 1], { auto: true, node: n });
 }
@@ -192,6 +337,8 @@ function seekYear(year, opts = {}) {
   state.nodeIdx = player.index;
   const n = NODES[Math.max(0, player.index)];
   state.activeIds = n ? n.events.map((e) => e.id) : [];
+  // 拖年表尺停在空档年时把镜头拉回全景，别一直怼在上一场战役上
+  aimAt(!n || y - n.year > 0.9 ? null : n);
   syncClock(y);
   syncNow();
   if (opts.rebuild) rebuildFeed(n);
@@ -221,8 +368,11 @@ function feedItemEl(n) {
     : `${n.campaignName} · ${n.events[0].place}`;
   if (n.events.length > 1) li.title = n.events.map((e) => e.name).join("；");
   li.addEventListener("click", () => {
+    armCamera();
     state.nodeIdx = n.seq;
     state.activeIds = n.events.map((e) => e.id);
+    camera.manual = false;
+    aimAt(n);
     showDossier(n.events[n.events.length - 1], { node: n });
     markActive(n.id);
   });
@@ -273,6 +423,11 @@ function showDossier(e, opts = {}) {
   $("d-date").textContent = `${year}年${month}月`;
   $("d-scale").textContent = e.scale === 3 ? "决定性" : e.scale === 2 ? "战役" : "战斗";
   $("d-scale").dataset.scale = String(e.scale);
+  const unit = unitOf(e.id);
+  const unitEl = $("d-unit");
+  unitEl.textContent = unit ? unit.label : "";
+  unitEl.style.color = unit ? unit.color : "";
+  unitEl.hidden = !unit;
   $("d-name").textContent = e.name;
   $("d-place").textContent = e.place;
   $("d-note").textContent = e.note;
@@ -302,6 +457,7 @@ function bind() {
       return;
     }
     // 停在末节时按播放＝重看一遍，而不是把最后一节再念一次就停
+    armCamera();
     if (player.atEnd || state.nodeIdx >= NODES.length - 1) goNode(0, { rebuild: true });
     setPlaying(true);
     player.play(performance.now());
@@ -309,18 +465,22 @@ function bind() {
 
   $("btn-prev").addEventListener("click", () => {
     setPlaying(false);
+    armCamera();
     const k = prevNodeIndex(NODES, state.year);
     goNode(k < 0 ? 0 : k, { dossier: true });
   });
 
   $("btn-next").addEventListener("click", () => {
     setPlaying(false);
+    armCamera();
     const k = nextNodeIndex(NODES, state.year);
     goNode(k < 0 ? NODES.length - 1 : k, { dossier: true });
   });
 
   $("btn-reset").addEventListener("click", () => {
     setPlaying(false);
+    camera.manual = false;
+    camera.armed = true;
     goNode(0, { rebuild: true });
     hideDossier();
   });
@@ -372,6 +532,7 @@ function bind() {
   };
   density.addEventListener("pointerdown", (ev) => {
     dragging = true;
+    armCamera();
     // 捕获失败不该拖累定位（老浏览器或合成事件都可能不给 pointerId）
     try { density.setPointerCapture(ev.pointerId); } catch {}
     setPlaying(false);
@@ -458,9 +619,10 @@ function bind() {
   // 滚轮缩放
   canvas.addEventListener("wheel", (ev) => {
     ev.preventDefault();
-    const next = Math.max(1, Math.min(3.2, state.zoom * (ev.deltaY > 0 ? 0.9 : 1.1)));
-    state.zoom = next;
-    resize();
+    // 用户自己缩放后，镜头不再跟着节点跑；复位或点战役节点时交还给自动
+    camera.manual = true;
+    camera.zoom = Math.max(1, Math.min(2.6, camera.zoom * (ev.deltaY > 0 ? 0.9 : 1.1)));
+    view = buildView();
   }, { passive: false });
 
   reduceMotion.addEventListener?.("change", () => {});
@@ -478,13 +640,30 @@ function scrollFeedTo(id) {
 
 /* ───────────────────────── 启动 ───────────────────────── */
 
+/** 地形晕渲图（离线烘好的灰度图）。加载失败不阻塞——底图退化为纯色块。 */
+function loadTerrain() {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.decoding = "async";
+    img.onload = () => {
+      base.terrain = img;
+      resolve(img);
+    };
+    img.onerror = () => resolve(null);
+    img.src = "data/geo/terrain.webp";
+  });
+}
+
 async function boot() {
   const res = await fetch("data/geo/basemap.json");
   base = await res.json();
+  await loadTerrain();
 
   $("total").textContent = EVENTS.length;
   $("about-count").textContent = EVENTS.length;
   $("about-nodes").textContent = NODES.length;
+
+  controlSteps = buildControlSteps(undefined, NODES);
 
   buildEraNav();
   buildTicks();
@@ -509,6 +688,8 @@ function buildEraNav() {
       setPlaying(false);
       // 跳到这个时期的第一节，而不是它开始的那一年——年表上可能先有空档
       const first = NODES.find((n) => n.era === era.id);
+      camera.manual = false;
+      armCamera();
       goNode(first ? first.seq : 0, { rebuild: true });
       hideDossier();
     });

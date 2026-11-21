@@ -590,6 +590,7 @@ body.playing .play { background: rgba(224, 160, 58, 0.28); }
   color: var(--ink-3);
   margin-bottom: 7px;
   font-variant-numeric: tabular-nums;
+  padding-right: 22px; /* 给右上角关闭按钮留位 */
 }
 
 .chip {
@@ -606,6 +607,13 @@ body.playing .play { background: rgba(224, 160, 58, 0.28); }
 
 .dossier-meta .scale[data-scale="3"] { color: var(--red); }
 .dossier-meta .scale[data-scale="3"]::before { content: "◆ "; }
+
+/* 阵营 · 兵种：颜色就是地图上那个符号的颜色 */
+.dossier-meta .unit {
+  margin-left: auto;
+  letter-spacing: 0.04em;
+  opacity: 0.92;
+}
 
 #dossier h3 {
   margin: 0 0 3px;
