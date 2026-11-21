@@ -76,6 +76,11 @@ function buildView() {
   return createInsetView(base.bbox, layout.w, layout.h, layout.inset, camera.zoom, [camera.fx, camera.fy]);
 }
 
+// 调试钩子：只在 ?debug=1 时挂出当前视图与状态，验收脚本据此反查屏幕坐标。
+if (new URLSearchParams(location.search).has("debug")) {
+  window.__wm = { get view() { return view; }, get state() { return state; }, get camera() { return camera; } };
+}
+
 function resize() {
   const rect = canvas.getBoundingClientRect();
   dpr = Math.min(window.devicePixelRatio || 1, 2);

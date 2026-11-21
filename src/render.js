@@ -349,6 +349,19 @@ function drawArrow(ctx, view, arrow, progress, alpha, tint, weight = 1) {
     total += d;
   }
   if (total < 1) return;
+
+  // 大沽口到天津这类近距机动，投影到屏幕上只有七八像素——照实画等于没画。
+  // 方向是真的，长度按最小可读距离拉伸（这类「短箭头」在地图学里本来就靠符号化处理）。
+  const MIN_SPAN = 46 * weight;
+  if (total < MIN_SPAN) {
+    const k = MIN_SPAN / total;
+    const [ox, oy] = pts[0];
+    for (let i = 0; i < pts.length; i++) {
+      pts[i] = [ox + (pts[i][0] - ox) * k, oy + (pts[i][1] - oy) * k];
+    }
+    for (let i = 0; i < segs.length; i++) segs[i] *= k;
+    total = MIN_SPAN;
+  }
   const want = total * progress;
 
   const path = [pts[0]];
@@ -368,13 +381,31 @@ function drawArrow(ctx, view, arrow, progress, alpha, tint, weight = 1) {
 
   ctx.save();
   ctx.globalAlpha = alpha;
-  ctx.strokeStyle = tint;
-  ctx.lineWidth = (arrow.kind === "naval" ? 2 : 2.4) * weight;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   if (arrow.kind === "naval") ctx.setLineDash([7, 5]);
   if (arrow.kind === "retreat") ctx.setLineDash([3, 4]);
 
+  // 先描一道暗底：箭头压在敌我同色的省面上也得看得出来
+  ctx.globalAlpha = alpha * 0.55;
+  ctx.strokeStyle = "rgba(6,14,20,0.85)";
+  ctx.lineWidth = (arrow.kind === "naval" ? 2 : 2.4) * weight + 2.4;
+  ctx.beginPath();
+  ctx.moveTo(path[0][0], path[0][1]);
+  for (let i = 1; i < path.length; i++) {
+    if (i < path.length - 1) {
+      const mx = (path[i][0] + path[i + 1][0]) / 2;
+      const my = (path[i][1] + path[i + 1][1]) / 2;
+      ctx.quadraticCurveTo(path[i][0], path[i][1], mx, my);
+    } else {
+      ctx.lineTo(path[i][0], path[i][1]);
+    }
+  }
+  ctx.stroke();
+
+  ctx.globalAlpha = alpha;
+  ctx.strokeStyle = tint;
+  ctx.lineWidth = (arrow.kind === "naval" ? 2 : 2.4) * weight;
   ctx.beginPath();
   ctx.moveTo(path[0][0], path[0][1]);
   for (let i = 1; i < path.length; i++) {
@@ -575,6 +606,14 @@ function drawEventDots(ctx, view, list, player, stamp, activeSet, zoom, labelId)
 }
 
 /** 提亮一个 #rrggbb 颜色：往白里掺 30%，用于高亮态 */
+/** 把 `#d24a3a` 这样的阵营色转成带透明度的 rgba，供箭头随阵营上色 */
+function rgbaOf(color, a) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(color).trim());
+  if (!m) return color;
+  const n = parseInt(m[1], 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
+
 function boost(hex) {
   const m = /^#([0-9a-f]{6})$/i.exec(hex);
   if (!m) return hex;
@@ -720,9 +759,13 @@ export function draw(ctx, view, state) {
   const residArrows = revealed.filter((e) => !activeSet.has(e.id) && e.arrows && e.arrows.length).slice(-1);
 
   // 上一节点的箭头只留一点痕迹，指个方向就走
+  const arrowColor = (e) => {
+    const u = unitOf(e.id);
+    return u ? u.color : `rgb(${ERA_TINT[e.era] || "150,160,170"})`;
+  };
   for (const e of residArrows) {
     for (const a of e.arrows) {
-      drawArrow(ctx, view, a, 1, 0.2, `rgba(${ERA_TINT[e.era] || "150,160,170"},0.9)`);
+      drawArrow(ctx, view, a, 1, 0.2, arrowColor(e));
     }
   }
 
@@ -747,7 +790,7 @@ export function draw(ctx, view, state) {
     const fade = player.freshness(it.e.id, stamp, 2600);
     // 箭头先到、目标后亮：让两者不同时发生，因果才读得出来
     const grow = Math.min(1, fade / 0.6);
-    drawArrow(ctx, view, it.a, grow, isLead ? 0.95 : 0.44, isLead ? C.accent : `rgba(${ERA_TINT[it.e.era] || "150,160,170"},0.9)`, isLead ? 1 : 0.62);
+    drawArrow(ctx, view, it.a, grow, isLead ? 0.95 : 0.42, arrowColor(it.e), isLead ? 1 : 0.62);
   }
 
   drawEventDots(ctx, view, revealed, player, stamp, activeSet, zoom, labelId);
