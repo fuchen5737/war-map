@@ -6,7 +6,17 @@
 
 ![影片模式的八帧](docs/frames.jpg)
 
-另有一个**影片模式**（`cinema.html`）：只讲抗战十四年，22 节、1280×720 的视频版式——红色斜线是日军占领区，旭日旗跟着侵略一路铺开，金色是胜仗与敌后根据地，白色火苗是殉国的将领。它复用同一套数据与底图，把交互界面的侧栏、时间轴全收掉，只留一条进度条。左栏底部的「影片模式」入口进去，影片里的「交互版」回来。
+另有一个**影片模式**（`cinema.html`）：只讲抗战十四年，22 节、1280×720 的视频版式。它复用同一套数据与底图，把侧栏与时间轴全收掉，只留一条进度条，整帧用 Canvas 画完——所以任何一帧都能直接截图当封面。左栏底部的「影片模式」入口进去，影片里的「交互版」回来。
+
+一帧里同时坐着五件事：
+
+- **地图**只画到省，本土压成墨色，占领区是一整块带橙红双层光边的斜线面（省份之间的缝被糊掉，读成一整片而不是几块补丁）
+- **城市**是白点加名字，刚沦陷的几座下挂「沦陷 9.19」这样的红框小签
+- **左栏**是巨大年份 + 点分日期 +「全面抗战 第 N 天」，下面挂着那句「三个月灭亡中国」——三个月期满那天加删除线，标「已过」
+- **右栏**是这一节的标题、副题、一张定位小图，和「沦陷城市 N」的四列格子（新落城的亮红）；受降那一节整块转金，标题变「光复城市 41」
+- **底部**只有一条小图例和一行字幕
+
+镜头不是整幅不动：每节按战场位置推近到「一到两省」的框，焦点向右偏一点给右栏让位，一节走完再平移到下一节。
 
 ## 跑起来
 
@@ -60,7 +70,7 @@ war-map/
 │   ├── render.js       Canvas 2D 手绘：海、地形、邻国、省界、河流、控制区、符号、箭头、标签、图例
 │   ├── control.js      控制区累计态：变化点 → 逐节快照、成波顺序、翻色透明度
 │   ├── app.js          装配层：尺寸、镜头、rAF 主循环、播放、战事流、档案卡、事件绑定
-│   ├── cinema.js       影片模式的一帧：斜线占领区、旭日旗、火苗、金星、年份与字幕
+│   ├── cinema.js       影片模式的一帧：斜线占领区、城市与沦陷日签、左右栏、光复光点
 │   ├── cinema-app.js   影片模式的装配层：22 节、镜头推近、进度条
 │   └── kit/            绘图组件库（与数据无关，可移植到别的地图）
 │       ├── ease.js     缓动、颜色（hex 与 rgb() 都认）
@@ -69,6 +79,8 @@ war-map/
 │       ├── overlay.js  暗角、字幕带、年份牌、战役标题、图例、天数行
 │       └── index.js    统一出口
 ├── data/
+│   ├── cities.js       41 座城市与沦陷日期（影片模式的城市点与「沦陷城市」格）
+│   ├── moments.js      两个不能只用一行字交代的节点（南京大屠杀、南京受降）
 │   ├── events.js       158 条战事 + 13 个时期
 │   ├── campaigns.js    20 场战役 + 145 个节点（引用 events 的 id）
 │   ├── units.js        阵营与兵种：每条战事的 [阵营, 兵种]，以及阵营配色
@@ -185,7 +197,7 @@ python3 tools/bake-terrain.py --width 2200
 ## 测试
 
 ```bash
-node --test tests/*.test.mjs     # 103 passed
+node --test tests/*.test.mjs     # 121 passed
 ```
 
 - `tests/nodes.test.mjs` — 每条战事恰好属于一个节点、节点时间单调、取组内末条时刻、三种数据错误会抛、同刻稳定排序；`nodeIndexAtYear` 二分与线性扫描一致；`next/prevNodeIndex` 严格跨越；停留时长夹取；播放器逐节点推进、过渡期年份在两节之间、`tick` 不重复上报、末节点自停、终点再播放回卷、`seekNode`/`seekFree` 语义、拖年表尺后起播不倒退
@@ -194,6 +206,8 @@ node --test tests/*.test.mjs     # 103 passed
 - `tests/geo.test.mjs` — 投影互逆、`createView` 等比缩放与居中、`createInsetView` 的空闲区贴合、Haversine 京沪距离
 - `tests/units.test.mjs` — 每条战事都有符号、没有悬空 id、阵营与兵种键都已定义、每个阵营每个兵种都用上了、六条政治事件必须归 `pol`
 - `tests/kit.test.mjs` — 缓动端点与单调性、`parseHex` 兼容 hex 与 `rgb()/rgba()`（曾因只认 hex 把斜线刷成纯白）、`lighten` 二次调用不变白、斜线纹样尺寸随 DPR 放大且恒为正整数、字幕折行按宽度切且不超行数上限
+- `tests/cities.test.mjs` — 41 座城与底图对得上、城名不重复、日期落在 1931-09 到 1945-01 之间、坐标都在底图 bbox 内、`fallLabel` 出「9.19」、`fallenBy` 单调增长且 1945 年后是全部 41 座、`fallenWithin` 是 `fallenBy` 的子集、年份与时间戳互逆
+- `tests/moments.test.mjs` — 每一节特写都挂在真实节点上、一节只有一种画法、kind 只有两种、标题副题注文都不为空、**南京的光点数 × 每点人数正好是 30 万**、受降那一节写的是「41 / 41」
 - `tests/control.test.mjs` — 控制点引用的节点/省名/阵营都真实存在、累计态单调（没被点名的省不会无故变色）、重复声明不算变化、`controlAt` 夹取、几条史实链（香港 1841 west → 1942 jp → 1945 归还、东北 1931 jp → 受降 gov → 辽沈 rev）、翻色顺序按距离且延迟不超 0.6、翻色透明度边界
 
 ## 影片模式与组件库
@@ -207,7 +221,7 @@ node --test tests/*.test.mjs     # 103 passed
 | `ease.js` | `clamp/lerp/easeOut/smoothstep/pulse/window01`；`parseHex/rgba/mixColor/lighten` 颜色工具（hex 与 `rgb()` 都认） |
 | `hatch.js` | `hatchPattern(opts)` 生成 45° 斜线 `CanvasPattern`，按参数 key 缓存离屏画布；`hatchFill(ctx, path, opts)` 直接填充 |
 | `marks.js` | `drawRisingSun`（旭日旗）、`drawFlame`（火苗）、`drawStar`（八角星）、`drawBracket`（上括号）、`drawSeal`（印章）、`halo`（统一暗底描边） |
-| `overlay.js` | `drawVignette`、`drawCaptionBand`、`drawYearCard`、`drawDayCount`、`drawTitleCard`、`drawCaption`、`drawKicker`、`drawFilmLegend`、`drawSource`、`drawLetterbox`、`wrapLines` |
+| `overlay.js` | `drawVignette`、`drawCaptionBand`、`drawYearCard`、`drawDayCount`、`drawTitleCard`、`drawPanelTitle`（朱红竖线 + 标题 + 下注）、`drawCityGrid`（「沦陷城市 N」四列格）、`drawQuoteBlock`（引文 + 删除线 + 期限进度）、`drawFallTag`（「沦陷 9.19」红框小签）、`drawInsetFrame`（插图框 + 底部说明）、`drawCaption`、`drawKicker`、`drawFilmLegend`、`drawSource`、`drawLetterbox`、`wrapLines` |
 
 用法一律是「先算位置，再画」：
 
@@ -227,7 +241,8 @@ drawYearCard(ctx, 60, 100, 1937, 7); // 「1937」+「7月」
 - **占领区要「暗红成片」，不是几根亮线。** 底色与条纹都做成不透明的深红（`mixColor(color, "#000", 0.46)` 与 `0.26`），别拿半透明去和地形混——混出来发灰发粉，正是早期版本比参考片「淡」一个数量级的原因。
 - **省与省的缝隙要糊上。** 填完省面再用同一个 pattern 沿省界描 `lineWidth: 22` 的一圈，占领区才读成一整片，而不是几块分开的补丁。
 - **只有占领区用斜线。** 革命根据地改用淡平铺色 + 金色括号，不与占领区抢视觉主语。
-- **镜头别推太近。** 战区占画面 64%、zoom 上限 1.75：再近就把「这里离哪儿近」的参照挤出画面，占领区的红占比反而骤降。
+- **镜头别推太近。** 战区占画面 62%、zoom 上限 3.1：再近就把「这里离哪儿近」的参照挤出画面。参考片的框是「一到两省」，不是把战场怼满屏——推太狠时占领区被裁到画外，看上去像什么都没发生。
+- **占领区的边缘靠两次 `fill` 的阴影叠出来。** 同一路径先 `shadowBlur=38` 铺外圈大晕，再 `shadowBlur=9` 勾内圈亮边；阴影只由整块轮廓投影，内部共享边不会跟着描出来。
 - **点击进度条要吸附到最近的一节。** 画面是按节点讲的，年份与字幕必须对得上；自由年份会出现「写着 1935、说的却是 1933 那一节」。
 
 ## 部署到 GitHub Pages

@@ -6,7 +6,7 @@
 //
 // 全部画在 canvas 上而不是 DOM——视频模式要能整帧导出。
 
-import { rgba } from "./ease.js";
+import { rgba, clamp } from "./ease.js";
 
 const FONT_YEAR = '"Helvetica Neue", "PingFang SC", system-ui, sans-serif';
 const FONT_CN = '"Songti SC", "Source Han Serif SC", "Noto Serif CJK SC", serif';
@@ -339,6 +339,246 @@ export function drawFilmLegend(ctx, x, y, items, opts = {}) {
     const label = it.label;
     ctx.fillText(label, cx + r + size * 0.62, cy);
     cx += r + size * 0.62 + ctx.measureText(label).width + gap;
+  }
+  ctx.restore();
+}
+
+/* ─────────── 影片模式：信息面板 / 城市格 / 引文块 / 沦陷标签 ─────────── */
+
+/**
+ * 面板标题：一根朱红竖线 + 大标题 + 一行小注。
+ * 参考片的右栏就是这一块，标题压在暗角上，竖线把读者的眼睛钉在标题左边。
+ */
+export function drawPanelTitle(ctx, x, y, title, sub, opts = {}) {
+  const {
+    size = 34,
+    subSize = 13,
+    color = "#eef2f5",
+    subColor = "rgba(214,224,232,0.72)",
+    rule = "#b3273a",
+    align = "left",
+    alpha = 1,
+  } = opts;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.textBaseline = "alphabetic";
+
+  const w = Math.max(ctx.measureText(title).width, 1);
+  const dir = align === "right" ? -1 : 1;
+  // 竖线：标题左侧（右对齐时在右侧），比标题略高
+  ctx.strokeStyle = rule;
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  const rx = x - dir * 16;
+  ctx.moveTo(rx, y - size * 0.86);
+  ctx.lineTo(rx, y + 6);
+  ctx.stroke();
+
+  ctx.textAlign = align === "right" ? "right" : "left";
+  ctx.font = `700 ${size}px "Songti SC","Source Han Serif SC","Noto Serif CJK SC",serif`;
+  ctx.shadowColor = "rgba(3,8,12,0.85)";
+  ctx.shadowBlur = 12;
+  ctx.fillStyle = color;
+  ctx.fillText(title, x, y);
+  ctx.shadowBlur = 0;
+
+  if (sub) {
+    ctx.font = `400 ${subSize}px "Songti SC","Source Han Serif SC","Noto Serif CJK SC",serif`;
+    ctx.fillStyle = subColor;
+    ctx.fillText(sub, x, y + subSize * 1.9);
+  }
+  ctx.restore();
+  return size + (sub ? subSize * 1.9 : 0);
+}
+
+/**
+ * 城市格：「沦陷城市 14」+ 四列小格，每格一枚城市名。
+ * 新沦陷的格子亮红，早就丢了的压暗——一眼能看出「这一阵又丢了哪些」。
+ */
+export function drawCityGrid(ctx, x, y, w, cities, opts = {}) {
+  const {
+    label = "沦陷城市",
+    count = cities.length,
+    cols = 4,
+    rowH = 26,
+    gap = 6,
+    size = 12,
+    maxRows = 9,
+    accent = "#ff5a3c",
+    dim = "rgba(150,42,44,0.55)",
+    dimText = "rgba(232,196,196,0.75)",
+    freshFill = "rgba(150,26,30,0.92)",
+    freshStroke = null,
+    freshText = "#fff3ef",
+    dimStroke = "rgba(150,42,44,0.5)",
+    alpha = 1,
+    headColor = "#eef2f5",
+    headAccent = "#ff6a44",
+  } = opts;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.textBaseline = "middle";
+
+  // 小标题：左「沦陷城市」，右大数字
+  ctx.textAlign = "left";
+  ctx.font = '600 13px "Songti SC","Source Han Serif SC",serif';
+  ctx.fillStyle = headColor;
+  ctx.fillText(label, x, y);
+  const lw = ctx.measureText(label).width;
+  ctx.font = '700 20px "Songti SC","Source Han Serif SC",serif';
+  ctx.fillStyle = headAccent;
+  ctx.fillText(String(count), x + lw + 8, y);
+
+  const top = y + rowH * 0.85;
+  const cellW = (w - gap * (cols - 1)) / cols;
+  const shown = cities.slice(-cols * maxRows);
+  drawnCells = 0;
+
+  for (let i = 0; i < shown.length; i++) {
+    const c = shown[i];
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    const cx = x + col * (cellW + gap);
+    const cy = top + row * (rowH + gap * 0.5);
+    const fresh = i >= shown.length - cols;
+    ctx.fillStyle = fresh ? freshFill : dim;
+    ctx.strokeStyle = fresh ? freshStroke || rgba(accent, 0.95) : dimStroke;
+    ctx.lineWidth = fresh ? 1.4 : 0.9;
+    if (ctx.roundRect) {
+      ctx.beginPath();
+      ctx.roundRect(cx, cy, cellW, rowH, 2);
+      ctx.fill();
+      ctx.stroke();
+    } else {
+      ctx.fillRect(cx, cy, cellW, rowH);
+      ctx.strokeRect(cx, cy, cellW, rowH);
+    }
+    ctx.font = `${fresh ? 600 : 400} ${size}px ui-sans-serif, system-ui, sans-serif`;
+    ctx.fillStyle = fresh ? freshText : dimText;
+    ctx.textAlign = "center";
+    ctx.fillText(c.name, cx + cellW / 2, cy + rowH / 2 + 0.5);
+    ctx.textAlign = "left";
+    drawnCells++;
+  }
+  ctx.restore();
+  drawnCells = 0;
+  return top + Math.ceil(shown.length / cols) * (rowH + gap * 0.5);
+}
+let drawnCells = 0;
+
+/**
+ * 引文块：一句叫嚣（或承诺）压在上面，下面一条细进度条走完整个期限。
+ * 参考片用它把「三个月灭亡中国」这句话吊在左上角，到期那天加删除线。
+ */
+export function drawQuoteBlock(ctx, x, y, w, opts = {}) {
+  const {
+    kicker = "",
+    quote = "",
+    struck = false,
+    progress = 0,
+    note = "",
+    size = 20,
+    alpha = 1,
+    accent = "#ff6a44",
+  } = opts;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+
+  if (kicker) {
+    ctx.font = '400 11px "Songti SC","Source Han Serif SC",serif';
+    ctx.fillStyle = "rgba(196,206,214,0.62)";
+    ctx.fillText(kicker, x, y);
+  }
+
+  const qy = y + size * 1.5;
+  ctx.font = `600 ${size}px "Songti SC","Source Han Serif SC",serif`;
+  ctx.fillStyle = struck ? "rgba(214,222,228,0.55)" : "#f0f3f5";
+  ctx.fillText(quote, x, qy);
+  const qw = ctx.measureText(quote).width;
+
+  if (struck) {
+    // 一句话到期了，划掉它——比写「已失败」重得多
+    ctx.strokeStyle = "rgba(230,120,96,0.9)";
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(x - 2, qy - size * 0.28);
+    ctx.lineTo(x + qw + 2, qy - size * 0.28);
+    ctx.stroke();
+  }
+
+  // 进度条
+  const by = qy + size * 0.95;
+  ctx.fillStyle = "rgba(120,132,142,0.35)";
+  ctx.fillRect(x, by, w, 2);
+  ctx.fillStyle = accent;
+  ctx.fillRect(x, by, w * clamp(progress, 0, 1), 2);
+
+  if (note) {
+    ctx.font = '400 11px ui-sans-serif, system-ui, sans-serif';
+    ctx.fillStyle = "rgba(206,214,222,0.66)";
+    ctx.fillText(note, x, by + 18);
+  }
+  ctx.restore();
+  return by + 24;
+}
+
+/** 城市点上挂的小标签：红边深底，写「沦陷 9.19」 */
+export function drawFallTag(ctx, x, y, text, opts = {}) {
+  const { size = 10, alpha = 1, color = "#ff6a44", bg = "rgba(58,10,14,0.92)" } = opts;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.font = `600 ${size}px ui-sans-serif, system-ui, sans-serif`;
+  const tw = ctx.measureText(text).width;
+  const padX = 4;
+  const h = size + 6;
+  const w = tw + padX * 2;
+  if (ctx.roundRect) {
+    ctx.beginPath();
+    ctx.roundRect(x - w / 2, y, w, h, 2);
+  } else {
+    ctx.beginPath();
+    ctx.rect(x - w / 2, y, w, h);
+  }
+  ctx.fillStyle = bg;
+  ctx.fill();
+  ctx.strokeStyle = rgba(color, 0.85);
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.fillStyle = "rgba(255,232,226,0.94)";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, x, y + h / 2 + 0.5);
+  ctx.restore();
+  return h;
+}
+
+/** 照片框：没有史料照片就放一块「战区特写」——同一块版式，不伪装成影像 */
+export function drawInsetFrame(ctx, x, y, w, h, opts = {}) {
+  const { caption = "", alpha = 1, border = "rgba(220,226,232,0.55)", draw = null } = opts;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  // 外框留一圈黑边，像一张照片
+  ctx.fillStyle = "rgba(6,10,14,0.92)";
+  ctx.fillRect(x - 3, y - 3, w + 6, h + 6);
+  ctx.strokeStyle = border;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x - 3.5, y - 3.5, w + 7, h + 7);
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x, y, w, h);
+  ctx.clip();
+  if (draw) draw(ctx, x, y, w, h);
+  ctx.restore();
+
+  if (caption) {
+    ctx.font = '400 10.5px "Songti SC","Source Han Serif SC",serif';
+    ctx.fillStyle = "rgba(206,214,222,0.72)";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText(caption, x - 1, y + h + 8);
   }
   ctx.restore();
 }

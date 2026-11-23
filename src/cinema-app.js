@@ -55,7 +55,16 @@ if (new URLSearchParams(location.search).has("debug")) {
     get control() { return controlState(); },
     get camera() { return camera; },
     get base() { return base; },
+    get nodes() { return WAR; },
     rebuild() { buildView(); },
+    seek(id) {
+      const i = WAR.findIndex((n) => n.id === id);
+      if (i < 0) return false;
+      player.pause();
+      player.seekNode(i, performance.now());
+      enterNode(WAR[i]);
+      return true;
+    },
   };
 }
 
@@ -114,11 +123,13 @@ function goalFor(node) {
   if (!t) {
     return { fx: (minX + maxX) / 2, fy: (minY + maxY) / 2, zoom: 1 };
   }
-  // 战区占画面 64%：够近看得出打在哪一省，又不至于把邻省全挤出画面
-  // （参考片也没把地图裁到只剩战场，边上总留着「这里离哪儿近」的参照）
-  const want = Math.min((W * 0.64) / t.dx, (H * 0.64) / t.dy);
-  const zoom = clamp(want / sBase, 1, 1.75);
-  const k = clamp((zoom - 1) / 1.5, 0, 1);
+  // 参考片是区域级特写：战场只占画面三四成，省界放大到能认出县一级的邻接。
+  // 战区取画面 32%，上限推到 5 倍——不够近就还是「全国图」，那是另一部片子。
+  // 参考片的镜头是「一省到两省」的框，不是把战场怼满屏：
+  // 太深会把占领区挤出画面，看起来就像什么都没有。
+  const want = Math.min((W * 0.62) / t.dx, (H * 0.62) / t.dy);
+  const zoom = clamp(want / sBase, 1, 3.1);
+  const k = clamp((zoom - 1) / 1.9, 0, 1);
   const cx0 = (minX + maxX) / 2;
   const cy0 = (minY + maxY) / 2;
   let fx = cx0 + (t.cx - cx0) * k;
@@ -127,6 +138,9 @@ function goalFor(node) {
   const halfH = H / sBase / zoom / 2;
   fx = Math.min(maxX - halfW, Math.max(minX + halfW, fx));
   fy = Math.min(maxY - halfH, Math.max(minY + halfH, fy));
+  // 右栏压住画面右侧三成：把镜头中心右移，战场才落在看得见的那半边
+  const shift = (W * 0.42) / (sBase * zoom) * k;
+  fx = Math.min(maxX - halfW, Math.max(minX + halfW, fx + shift));
   if (!(maxX - minX > halfW * 2)) fx = cx0;
   if (!(maxY - minY > halfH * 2)) fy = cy0;
   return { fx, fy, zoom };
