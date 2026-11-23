@@ -142,20 +142,23 @@ function drawLeftColumn(ctx, W, H, year, narrow) {
   ctx.fillStyle = "rgba(232,238,242,0.82)";
   ctx.fillText(md, x + yw + dateSize * 0.12, y0 + yearSize * 0.72);
 
-  // 第 N 天
+  // 第 N 天：两个计时器各算各的，别拿九一八的起点数「全面抗战」的天数
   if (year >= WAR_FROM) {
-    const days = Math.max(1, Math.round((year - WAR_FROM) * 365.2425));
+    const full = year >= DECLARE;
+    const label = full ? "全面抗战" : "九一八以来";
+    const days = Math.max(1, Math.round((year - (full ? DECLARE : WAR_FROM)) * 365.2425));
     const dy = y0 + yearSize * 0.72 + Math.round(H * 0.052);
     ctx.font = '400 13px "Songti SC","Source Han Serif SC",serif';
     ctx.fillStyle = "rgba(214,224,232,0.78)";
-    ctx.fillText(year >= DECLARE ? "全面抗战" : "九一八以来", x, dy);
-    const pw = ctx.measureText(year >= DECLARE ? "全面抗战" : "九一八以来").width;
+    ctx.fillText(label, x, dy);
+    const pw = ctx.measureText(label).width;
     ctx.font = '700 15px ui-sans-serif, system-ui, sans-serif';
     ctx.fillStyle = "#f2f5f7";
     ctx.fillText(`第 ${days} 天`, x + pw + 10, dy);
   }
 
-  // 引文块：「三个月灭亡中国」——到期那天划掉
+  // 引文块：「三个月灭亡中国」——这句话是 1937 年才说的，之前的年分不该挂它
+  if (year >= DECLARE - 0.34) {
   const qy = y0 + yearSize * 0.72 + Math.round(H * 0.115);
   const over = year > DECLARE_END;
   const prog = clamp((year - DECLARE) / (DECLARE_END - DECLARE), 0, 1);
@@ -167,8 +170,9 @@ function drawLeftColumn(ctx, W, H, year, narrow) {
     progress: prog,
     note: over ? "三个月期限 · 已过" : `三个月期限 · 还剩 ${left} 天`,
     size: narrow ? 16 : 19,
-    alpha: year < 1932.5 ? 0.55 : 1,
+    alpha: clamp((year - (DECLARE - 0.34)) / 0.2, 0, 1),
   });
+  }
   ctx.restore();
 }
 
@@ -498,7 +502,20 @@ function drawCities(ctx, view, base, t, year) {
     ctx.fillText(c.name, nx, y);
 
     if (recent.includes(c)) {
-      drawFallTag(ctx, x, y + 9, `沦陷 ${fallLabel(c)}`, { size: 9.5 });
+      // 日签也要避让：相邻两座城的签会叠成一条，读不出哪个日期属于哪个点
+      const label = `沦陷 ${fallLabel(c)}`;
+      ctx.font = '600 9.5px "Songti SC","Source Han Serif SC",serif';
+      const tagW = ctx.measureText(label).width + 11;
+      const tagH = 14;
+      const free = (ty) =>
+        !used.some((r) => x - tagW / 2 < r[0] + r[2] && x + tagW / 2 > r[0] && ty - tagH / 2 < r[1] + r[3] && ty + tagH / 2 > r[1]);
+      let ty = y + 14;
+      if (!free(ty)) ty = y - 16;
+      if (!free(ty)) ty = y + 30;
+      if (free(ty)) {
+        used.push([x - tagW / 2, ty - tagH / 2, tagW, tagH]);
+        drawFallTag(ctx, x, ty, label, { size: 9.5 });
+      }
       ctx.textAlign = "left";
     }
   }

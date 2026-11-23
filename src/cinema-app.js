@@ -98,12 +98,14 @@ function rectFor(node) {
     x1 = Math.max(x1, x);
     y1 = Math.max(y1, y);
   }
-  const MIN = 0.06;
+  // 单点战事也要留出周边：只给 0.06 会推到最紧，海岸线一占，画面全是海
+  const MIN = 0.085;
   return {
     cx: (x0 + x1) / 2,
     cy: (y0 + y1) / 2,
     dx: Math.max(MIN, x1 - x0),
     dy: Math.max(MIN, y1 - y0),
+    origin: [(x0 + x1) / 2, (y0 + y1) / 2],
   };
 }
 
@@ -114,7 +116,34 @@ function goalFor(node) {
     const [minX, minY, maxX, maxY] = base.bbox;
     return { fx: (minX + maxX) / 2, fy: (minY + maxY) / 2, zoom: 1 };
   }
-  const t = rectFor(node);
+  let t = rectFor(node);
+  let merged = false;
+  // 战场之外，画面里还得有占领区——否则这一帧全是墨色，读不出「打到哪儿了」。
+  // 取离战场最近的一块占领省，把它的位置并进取景框。
+  const occ = occupiedPoints();
+  if (t && occ.length) {
+    let best = null;
+    let bestD = Infinity;
+    for (const [px, py] of occ) {
+      const d = Math.hypot(px - t.cx, py - t.cy);
+      if (d < bestD) { bestD = d; best = [px, py]; }
+    }
+    // 占领区离战场太远就别并进来：一帧框住半个中国，读起来像全国图
+    if (best && bestD < 0.42) {
+      const x0 = Math.min(t.cx - t.dx / 2, best[0]);
+      const x1 = Math.max(t.cx + t.dx / 2, best[0]);
+      const y0 = Math.min(t.cy - t.dy / 2, best[1]);
+      const y1 = Math.max(t.cy + t.dy / 2, best[1]);
+      // 占领区离得太远时不要硬并——一帧框住半个中国，就退回只框战场
+      if (x1 - x0 < 0.55 && y1 - y0 < 0.55) {
+        merged = true;
+        t.cx = (x0 + x1) / 2;
+        t.cy = (y0 + y1) / 2;
+        t.dx = x1 - x0;
+        t.dy = y1 - y0;
+      }
+    }
+  }
   const rect = canvas.getBoundingClientRect();
   const W = rect.width;
   const H = rect.height;
@@ -127,8 +156,15 @@ function goalFor(node) {
   // 战区取画面 32%，上限推到 5 倍——不够近就还是「全国图」，那是另一部片子。
   // 参考片的镜头是「一省到两省」的框，不是把战场怼满屏：
   // 太深会把占领区挤出画面，看起来就像什么都没有。
-  const want = Math.min((W * 0.62) / t.dx, (H * 0.62) / t.dy);
-  const zoom = clamp(want / sBase, 1, 3.1);
+  let want = Math.min((W * 0.55) / t.dx, (H * 0.55) / t.dy);
+  let zoom = clamp(want / sBase, 1, 3.1);
+  // 并进占领区之后如果框被撑得太大（近景变成全国图），退回只框战场：
+  // 那样的镜头读起来像「看全图」，而这一节讲的是某个城。
+  if (merged && zoom < 2.0) {
+    t = rectFor(node);
+    want = Math.min((W * 0.55) / t.dx, (H * 0.55) / t.dy);
+    zoom = clamp(want / sBase, 1, 2.8);
+  }
   const k = clamp((zoom - 1) / 1.9, 0, 1);
   const cx0 = (minX + maxX) / 2;
   const cy0 = (minY + maxY) / 2;
@@ -136,13 +172,33 @@ function goalFor(node) {
   let fy = cy0 + (t.cy - cy0) * k;
   const halfW = W / sBase / zoom / 2;
   const halfH = H / sBase / zoom / 2;
-  fx = Math.min(maxX - halfW, Math.max(minX + halfW, fx));
-  fy = Math.min(maxY - halfH, Math.max(minY + halfH, fy));
-  // 右栏压住画面右侧三成：把镜头中心右移，战场才落在看得见的那半边
-  const shift = (W * 0.42) / (sBase * zoom) * k;
-  fx = Math.min(maxX - halfW, Math.max(minX + halfW, fx + shift));
-  if (!(maxX - minX > halfW * 2)) fx = cx0;
-  if (!(maxY - minY > halfH * 2)) fy = cy0;
+  // 允许镜头探出视域四成（画面边缘就是海，参考片也这样），
+  // 否则华东战场的取景会被底图右边界钉死，只能看全图。
+  const padX = halfW * 0.42;
+  const padY = halfH * 0.42;
+  const loX = minX + halfW - padX;
+  const hiX = maxX - halfW + padX;
+  const loY = minY + halfH - padY;
+  const hiY = maxY - halfH + padY;
+  fx = hiX > loX ? Math.min(hiX, Math.max(loX, fx)) : (minX + maxX) / 2;
+  fy = hiY > loY ? Math.min(hiY, Math.max(loY, fy)) : (minY + maxY) / 2;
+  // 右栏压住画面右侧三成，可见区中心在 0.35W：
+  // 镜头只右移这一点（0.15W），多了就把占领区推到画框外去
+  const shift = (W * 0.15) / (sBase * zoom) * k;
+  fx = hiX > loX ? Math.min(hiX, Math.max(loX, fx + shift)) : cx0;
+
+  // 战场本身必须落在看得见的那半边——取景框把占领区并进来之后，
+  // 战场可能被推到右栏底下，那这一节就白讲了。
+  if (t && t.origin) {
+    const px = (t.origin[0] - fx) * sBase * zoom + W / 2;
+    const py = H / 2 - (t.origin[1] - fy) * sBase * zoom;
+    if (px > W * 0.62) fx += (px - W * 0.62) / (sBase * zoom);
+    else if (px < W * 0.18) fx += (px - W * 0.18) / (sBase * zoom);
+    if (py > H * 0.72) fy -= (py - H * 0.72) / (sBase * zoom);
+    else if (py < H * 0.22) fy -= (py - H * 0.22) / (sBase * zoom);
+    fx = hiX > loX ? Math.min(hiX, Math.max(loX, fx)) : cx0;
+    fy = hiY > loY ? Math.min(hiY, Math.max(loY, fy)) : cy0;
+  }
   return { fx, fy, zoom };
 }
 
@@ -164,6 +220,21 @@ function stepCamera(dt) {
 }
 
 /* ───────────────────────── 控制区 ───────────────────────── */
+
+/** 当前已被占领的省的标注点（投影坐标） */
+function occupiedPoints() {
+  const st = controlState();
+  if (!st) return [];
+  const pts = provincePoints();
+  const out = [];
+  for (const [name, faction] of st.held) {
+    if (faction !== "jp") continue;
+    if (name === "台湾") continue; // 1895 年就割让了，不参与取景
+    const p = pts.get(name);
+    if (p) out.push(p);
+  }
+  return out;
+}
 
 function provincePoints() {
   const m = new Map();
