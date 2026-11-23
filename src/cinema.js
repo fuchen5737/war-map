@@ -115,6 +115,15 @@ export function drawFilm(ctx, view, state) {
   // 右上：当前这一节的名字（多战事的节点用节点标题，单战事用它自己的名字）
   const node = player && player.node;
   if (node) {
+    // 右上角压一层软暗角：标题常常正落在沦陷区的斜线上，不垫一层读不清
+    const glow = ctx.createRadialGradient(W * 0.93, H * 0.11, H * 0.02, W * 0.93, H * 0.11, W * 0.34);
+    glow.addColorStop(0, "rgba(4,10,14,0.62)");
+    glow.addColorStop(1, "rgba(4,10,14,0)");
+    ctx.save();
+    ctx.fillStyle = glow;
+    ctx.fillRect(W * 0.55, 0, W * 0.45, H * 0.30);
+    ctx.restore();
+
     const title = node.total > 1 ? node.title : node.events[0].name;
     const sub = captionSub(state, node);
     drawTitleCard(ctx, Math.round(W * (narrow ? 0.94 : 0.955)), Math.round(H * (narrow ? 0.20 : 0.125)), title, sub, {
