@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>十四年 · 一张地图看完抗日战争 1931—1945</title>
+<meta name="description" content="从九一八到南京受降：红色斜线是日军占领区，旭日旗跟着侵略一路铺开，金色是胜仗与敌后根据地，白色火苗是殉国的将领。" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23060d12'/%3E%3Cpath d='M6 26 L16 6 L26 26' stroke='%23e8b45c' stroke-width='2' fill='none'/%3E%3Ccircle cx='16' cy='24' r='2.6' fill='%23b3273a'/%3E%3C/svg%3E" />
+<link rel="stylesheet" href="cinema.css" />
+</head>
+<body>
+<div id="film-wrap">
+  <canvas id="film" aria-label="十四年抗战地图"></canvas>
+
+  <!-- 年份、战役名、解说都画在 canvas 上（视频要能整帧导出），
+       这里只留一句给读屏听的摘要 -->
+  <p id="sr-now" class="sr-only" aria-live="polite"></p>
+
+  <!-- 进度条：细到几乎不打断画面，但点得着 -->
+  <div id="hud-bar" class="bar" role="slider" tabindex="0" aria-label="年份"></div>
+
+  <!-- 控制条：只在鼠标移入或暂停时出现，播放时自动隐去 -->
+  <div id="controls" class="controls">
+    <button id="btn-play" class="ctl play" aria-label="播放">
+      <svg class="ico-play" viewBox="0 0 24 24" width="18" height="18"><path d="M8 5 L19 12 L8 19 Z" fill="currentColor"/></svg>
+      <svg class="ico-pause" viewBox="0 0 24 24" width="18" height="18"><rect x="7" y="5" width="3.6" height="14" fill="currentColor"/><rect x="13.4" y="5" width="3.6" height="14" fill="currentColor"/></svg>
+    </button>
+    <button id="btn-restart" class="ctl" title="从头再看">重播</button>
+    <a class="ctl link" href="./">交互版</a>
+  </div>
+</div>
+<script type="module" src="src/cinema-app.js"></script>
+</body>
+</html>

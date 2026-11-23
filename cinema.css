@@ -1,0 +1,151 @@
+/* 影片模式的样式：除了几个控制件，画面上不该有别的框。
+   版式与 cinema.js 里画的位置对齐——年份在左上，解说在底部，进度条贴底。 */
+
+:root {
+  --gold: #e8b45c;
+  --red: #b3273a;
+  --ink: #eef4f8;
+  --dim: rgba(206, 226, 236, 0.58);
+  --pad: clamp(14px, 3.2vw, 38px);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: #02060a;
+  color: var(--ink);
+  font-family: "Songti SC", "Source Han Serif SC", "Noto Serif CJK SC", serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+#film-wrap {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  background: #02060a;
+}
+
+#film {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* 读屏摘要：视觉上不出现，但播放到哪一节能被念出来 */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ── 进度条 ── */
+
+.bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+}
+
+.bar::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--p, 0%);
+  background: linear-gradient(90deg, rgba(179, 39, 58, 0.5), var(--gold));
+  transition: width 0.12s linear;
+}
+
+.bar::after {
+  content: "";
+  position: absolute;
+  left: var(--p, 0%);
+  bottom: 0;
+  width: 2px;
+  height: 9px;
+  margin-left: -1px;
+  background: var(--gold);
+  box-shadow: 0 0 8px rgba(232, 180, 92, 0.7);
+}
+
+/* ── 控制条：平时藏起来，悬停或暂停才出来 ── */
+
+.controls {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--pad) + 2px);
+  transform: translateX(-50%) translateY(6px);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: rgba(6, 13, 18, 0.72);
+  border: 1px solid rgba(150, 182, 198, 0.14);
+  backdrop-filter: blur(8px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.22s ease, transform 0.22s ease;
+}
+
+#film-wrap:hover .controls,
+body.playing.paused-on-hover .controls,
+body:not(.playing) .controls {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* 播放中悬停才出现，别挡着画面 */
+body.playing #film-wrap:hover .controls { opacity: 1; pointer-events: auto; }
+
+.ctl {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: rgba(232, 238, 242, 0.86);
+  font: inherit;
+  font-family: ui-sans-serif, system-ui, "PingFang SC", sans-serif;
+  font-size: 12px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  text-decoration: none;
+  transition: background 0.16s ease, color 0.16s ease;
+}
+
+.ctl:hover { background: rgba(255, 255, 255, 0.09); color: #fff; }
+.ctl:focus-visible { outline: 1px solid var(--gold); outline-offset: 2px; }
+
+.play .ico-pause { display: none; }
+body.playing .play .ico-play { display: none; }
+body.playing .play .ico-pause { display: block; }
+
+.ctl.link { color: rgba(232, 180, 92, 0.82); }
+.ctl.link::after { content: "↗"; font-size: 10px; opacity: 0.7; }
+
+/* 播完自动暂停：给个收尾的呼吸，别停在最后一帧上 */
+body.ended .controls { opacity: 1; pointer-events: auto; }
+
+@media (prefers-reduced-motion: reduce) {
+  .controls, .bar::before { transition: none; }
+}
+
+@media (max-width: 620px) {
+  :root { --pad: 14px; }
+  .cap { bottom: calc(var(--pad) + 26px); width: 84vw; }
+}

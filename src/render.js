@@ -222,7 +222,7 @@ function overlayTerrain(ctx, view, base, shapes, alpha, wash) {
   ctx.restore();
 }
 
-function drawBasemap(ctx, view, base, control) {
+function drawBasemap(ctx, view, base, control, opts = {}) {
   const { width, height } = view;
   const g = ctx.createLinearGradient(0, 0, 0, height);
   g.addColorStop(0, C.seaDeep);
@@ -247,7 +247,8 @@ function drawBasemap(ctx, view, base, control) {
   }
   overlayTerrain(ctx, view, base, base.provinces.flatMap((p) => p.shapes), 1);
   // 控制区压在省界之下：色块是「谁占着」，界线是「省在哪」，两层不能互相盖住
-  drawControl(ctx, view, base, control);
+  // 影院模式不用实色块（那里画斜线占领区），用 opts.skipControl 关掉这一层
+  if (!opts.skipControl) drawControl(ctx, view, base, control);
   for (const p of base.provinces) {
     shapePaths(ctx, view, p.shapes, null, C.border, 1);
   }
@@ -277,7 +278,7 @@ function drawBasemap(ctx, view, base, control) {
   ctx.restore();
 }
 
-function drawPlaceLabels(ctx, view, base, zoom, avoid, dots) {
+export function drawPlaceLabels(ctx, view, base, zoom, avoid, dots) {
   ctx.save();
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
@@ -336,7 +337,7 @@ function drawPlaceLabels(ctx, view, base, zoom, avoid, dots) {
 }
 
 /** 箭头：曲线 + 箭头头部，按 progress 逐段画出 */
-function drawArrow(ctx, view, arrow, progress, alpha, tint, weight = 1) {
+export function drawArrow(ctx, view, arrow, progress, alpha, tint, weight = 1) {
   const pts = arrow.pts.map(([lon, lat]) => lonLatToScreen(view, lon, lat));
   if (pts.length < 2 || progress <= 0) return;
 
@@ -644,7 +645,7 @@ function drawFront(ctx, view, list, year, eras) {
 }
 
 /** 把绘制裁到面板围出来的空闲区：地图可以铺到半透明面板底下，文字和符号不行 */
-function clipFree(ctx, view) {
+export function clipFree(ctx, view) {
   if (!Number.isFinite(view.freeLeft) || !Number.isFinite(view.freeTop)) return;
   ctx.beginPath();
   ctx.rect(view.freeLeft, view.freeTop, view.freeW, view.freeH);
@@ -706,6 +707,10 @@ function drawLegend(ctx, view) {
     ctx.fillText(name, cx + 13, cy);
   });
   ctx.restore();
+}
+
+export function drawBasemapExported(ctx, view, base, control, opts) {
+  return drawBasemap(ctx, view, base, control, opts);
 }
 
 export function draw(ctx, view, state) {
