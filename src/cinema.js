@@ -33,16 +33,16 @@ import {
 
 const F = {
   sea: "#05090d",
-  land: "#0b1219",
-  neighbor: "#070c11",
-  border: "rgba(150,170,186,0.10)",
-  coast: "rgba(186,200,212,0.30)",
-  label: "rgba(170,188,202,0.34)",
-  labelStrong: "rgba(198,212,224,0.52)",
+  land: "#1b2430",
+  neighbor: "#0f171e",
+  border: "rgba(158,178,194,0.26)",
+  coast: "rgba(198,212,226,0.44)",
+  label: "rgba(176,194,208,0.46)",
+  labelStrong: "rgba(206,220,232,0.66)",
   ink: "#eef2f5",
   gold: "#e8b45c",
   flame: "#eae4e4",
-  red: "#8f1424",
+  red: "#8f2c34",
   redHi: "#ff5a2c",
 };
 
@@ -75,17 +75,17 @@ export function drawFilm(ctx, view, state) {
   drawLand(ctx, view, base);
   drawOccupation(ctx, view, base, control, player, stamp);
   drawProvinceLines(ctx, view, base);
-  drawCities(ctx, view, base, t, year);
+  const reserved = [];
+  drawBases(ctx, view, base, year, reserved);
+  drawCities(ctx, view, base, t, year, reserved);
   if (moment && moment.kind === "massacre") drawMassacre(ctx, view, moment, player, stamp);
   if (year >= 1945.55) {
     // 停住时给终态，否则画面停在节点上却一颗光点都没有
     const lit = player && player.mode === "node" && player.playing ? clamp(player.dwellProgress, 0, 1) : 1;
     drawLiberation(ctx, view, base, lit, stamp);
   }
-  drawBases(ctx, view, base, year);
   drawArrows(ctx, view, revealed, activeSet, player, stamp);
-  drawMarkers(ctx, view, revealed, activeSet, player, stamp);
-  drawPlaceLabels(ctx, view, base, state.zoom || 1);
+  drawMarkers(ctx, view, revealed, activeSet, player, stamp, reserved);
 
   // 右栏要压一层暗角，避免标题落进红块里读不清
   const panelW = narrow ? 0 : Math.round(W * 0.30);
@@ -214,7 +214,7 @@ function drawRightPanel(ctx, W, H, state, node, moment, t, narrow) {
     draw: (c, ix, iy, iw, ih) =>
       moment && moment.kind === "massacre"
         ? drawMassacreInset(c, ix, iy, iw, ih, moment, state.stamp)
-        : drawLocator(c, ix, iy, iw, ih, state.base, node),
+        : drawLocator(c, ix, iy, iw, ih, state.base, node, state.control),
   });
 
   // 沦陷城市格
@@ -245,7 +245,7 @@ function subLine(node) {
 }
 
 /** 定位小图：本土轮廓填暗底，战场外接矩形点一个朱红方框 */
-function drawLocator(ctx, x, y, w, h, base, node) {
+function drawLocator(ctx, x, y, w, h, base, node, control) {
   const [minX, minY, maxX, maxY] = base.bbox;
   const s = Math.min(w / (maxX - minX), h / (maxY - minY)) * 0.92;
   const tx = x + w / 2 - ((minX + maxX) / 2) * s;
@@ -272,6 +272,46 @@ function drawLocator(ctx, x, y, w, h, base, node) {
     ctx.fillStyle = "rgba(38,50,60,0.9)";
     ctx.fill("evenodd");
     ctx.stroke();
+  }
+  // 小图上也要能看出谁占着哪儿，否则这块只是一张空底
+  if (control && control.held && control.held.size) {
+    ctx.save();
+    if (base.outline) {
+      ctx.beginPath();
+      for (const shape of base.outline) {
+        for (const ring of shape) {
+          ring.forEach((pt, i) => {
+            const px = tx + pt[0] * s;
+            const py = ty - pt[1] * s;
+            if (i === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+          });
+          ctx.closePath();
+        }
+      }
+      ctx.clip("evenodd");
+    }
+    const byName = new Map(base.provinces.map((pp) => [pp.name, pp]));
+    for (const [name, faction] of control.held) {
+      if (faction === "gov") continue;
+      const prov = byName.get(name);
+      if (!prov) continue;
+      ctx.beginPath();
+      for (const shape of prov.shapes) {
+        for (const ring of shape) {
+          ring.forEach((pt, i) => {
+            const px = tx + pt[0] * s;
+            const py = ty - pt[1] * s;
+            if (i === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+          });
+          ctx.closePath();
+        }
+      }
+      ctx.fillStyle = faction === "jp" ? "rgba(178,28,38,0.62)" : "rgba(90,150,110,0.50)";
+      ctx.fill("nonzero");
+    }
+    ctx.restore();
   }
   // 战场框
   if (node && node.events.length) {
@@ -346,7 +386,7 @@ function drawLand(ctx, view, base) {
     ctx.save();
     shapePath(ctx, view, base.provinces.flatMap((p) => p.shapes));
     ctx.clip("evenodd");
-    ctx.globalAlpha = 0.18;
+    ctx.globalAlpha = 0.12;
     ctx.imageSmoothingQuality = "high";
     ctx.drawImage(img, x0, y0, w, h);
     ctx.restore();
@@ -384,16 +424,21 @@ function drawOccupation(ctx, view, base, control, player, stamp) {
     if (faction !== "jp") continue; // 参考片只把占领区刷红，根据地交给金色括号
     const prov = base.provinceByName.get(name);
     if (!prov) continue;
-    let g = groups.get(faction);
+    const w = wave.get(name);
+    const fresh = !!(w && w.to === "jp");
+    const key = fresh ? faction + ":fresh" : faction + ":stale";
+    let g = groups.get(key);
     if (!g) {
-      g = { provinces: [], color: hatchColorFor(faction) };
-      groups.set(faction, g);
+      g = { provinces: [], color: hatchColorFor(faction), fresh, hot: 0 };
+      groups.set(key, g);
     }
     g.provinces.push(prov);
+    if (fresh) g.hot = 1;
   }
   if (!groups.size) return;
 
-  for (const [, g] of groups) {
+  const ordered = [...groups.values()].sort((a, b) => Number(a.fresh) - Number(b.fresh));
+  for (const g of ordered) {
     // 一条路径装下所有省的环：nonzero 填充，内部共享边不出缝
     ctx.save();
     ctx.beginPath();
@@ -411,34 +456,43 @@ function drawOccupation(ctx, view, base, control, player, stamp) {
       }
     }
 
-    // 光边：用阴影当外发光，只有整块的轮廓会投影，内部缝隙不投
+    // 光边只给「刚翻色」的那一块。参考片里新占的一坨是亮的，
+    // 早几年占掉的（东北）已经暗下去，只有细斜纹，不再发光。
     const occ = g.color === F.red;
     const glow = occ ? "rgba(255,96,44,0.95)" : rgba(lighten(g.color, 0.3), 0.7);
-    ctx.save();
-    // 外圈：大半径的晕
-    ctx.shadowColor = glow;
-    ctx.shadowBlur = 38;
-    ctx.fillStyle = occ ? "rgba(150,24,32,0.92)" : rgba(mixColor(g.color, "#000", 0.5), 0.75);
-    ctx.fill("nonzero");
-    // 内圈：小半径的亮边，把轮廓勾清楚
-    ctx.shadowColor = occ ? "rgba(255,140,80,0.95)" : glow;
-    ctx.shadowBlur = 9;
-    ctx.fill("nonzero");
-    ctx.restore();
-
-    // 阴影只画了外圈，内芯再补一次纯色，避免中心发暗
-    ctx.fillStyle = occ ? "rgba(126,18,26,0.95)" : rgba(mixColor(g.color, "#000", 0.5), 0.72);
-    ctx.fill("nonzero");
+    if (occ) {
+      // 整块占领区都描一圈橙红光边：参考片里连 1931 就占掉的东北也带着这圈边，
+      // 只是本节刚翻色的更亮、晕更大。
+      const big = g.fresh ? 22 : 12;
+      const small = g.fresh ? 7 : 4;
+      ctx.save();
+      ctx.shadowColor = glow;
+      ctx.shadowBlur = big;
+      ctx.fillStyle = g.fresh ? "rgba(150,24,32,0.92)" : "rgba(96,38,43,0.96)";
+      ctx.fill("nonzero");
+      ctx.shadowColor = g.fresh ? "rgba(255,140,80,0.95)" : "rgba(226,110,66,0.8)";
+      ctx.shadowBlur = small;
+      ctx.fill("nonzero");
+      ctx.restore();
+      ctx.fillStyle = g.fresh ? "rgba(112,38,45,0.95)" : "rgba(96,38,43,0.96)";
+      ctx.fill("nonzero");
+    } else {
+      // 根据地不刷红，是一块淡绿
+      ctx.fillStyle = rgba(mixColor(g.color, "#000", 0.62), 0.72);
+      ctx.fill("nonzero");
+    }
 
     // 斜线：只铺在这块里
     ctx.save();
     ctx.clip("nonzero");
-    const baseC = mixColor(g.color, "#000000", occ ? 0.34 : 0.55);
-    const lineC = mixColor(g.color, "#000000", occ ? 0.06 : 0.34);
+    const shade = occ ? (g.fresh ? 0.30 : 0.50) : 0.55;
+    const lineShade = occ ? (g.fresh ? 0.04 : 0.14) : 0.34;
+    const baseC = mixColor(g.color, "#000000", shade);
+    const lineC = mixColor(g.color, "#000000", lineShade);
     const pattern = hatchPattern(ctx, {
       color: rgba(lineC, 0.92),
-      period: 3.4,
-      width: 1.15,
+      period: 3.0,
+      width: 1.0,
       angle: 45,
       bg: rgba(baseC, 0.97),
       dpr,
@@ -458,20 +512,24 @@ function drawOccupation(ctx, view, base, control, player, stamp) {
 
 /* ───────────────────────── 城市与标签 ───────────────────────── */
 
-function drawCities(ctx, view, base, t, year) {
+function drawCities(ctx, view, base, t, year, reserved = []) {
   const fallen = CITIES.filter((c) => stampOf(c.fall) <= t);
   const recent = year >= 1945.55 ? [] : fallen.slice(-3);
   ctx.save();
   ctx.textAlign = "left";
   ctx.textBaseline = "middle";
   // 城市名互相压住比不标还难看：记下已占的矩形，撞上就翻到点的左边
-  const used = [];
+  const used = reserved;
 
   for (const c of fallen) {
     const [x, y] = lonLatToScreen(view, c.at[0], c.at[1]);
     if (x < -40 || y < -20 || x > view.width + 40 || y > view.height + 20) continue;
+    // 底部字幕带和右栏信息面板上不标城市：那里的字比地名重要
+    if (y > view.height * 0.80) continue;
+    if (x > view.width * 0.695) continue;
 
     // 点
+    used.push([x - 3, y - 3, 6, 6]);
     ctx.beginPath();
     ctx.arc(x, y, 2.4, 0, Math.PI * 2);
     ctx.fillStyle = "rgba(240,246,250,0.9)";
@@ -510,9 +568,12 @@ function drawCities(ctx, view, base, t, year) {
       const free = (ty) =>
         !used.some((r) => x - tagW / 2 < r[0] + r[2] && x + tagW / 2 > r[0] && ty - tagH / 2 < r[1] + r[3] && ty + tagH / 2 > r[1]);
       let ty = y + 14;
+      if (ty > view.height * 0.80) ty = y - 16;
       if (!free(ty)) ty = y - 16;
-      if (!free(ty)) ty = y + 30;
-      if (free(ty)) {
+      // 兜底那一位如果又掉回字幕带里，宁可不标
+      const lowOk = ty < view.height * 0.80;
+      if (!free(ty) || !lowOk) ty = lowOk ? y + 30 : y - 16;
+      if (free(ty) && ty < view.height * 0.80) {
         used.push([x - tagW / 2, ty - tagH / 2, tagW, tagH]);
         drawFallTag(ctx, x, ty, label, { size: 9.5 });
       }
@@ -629,6 +690,9 @@ function drawLiberation(ctx, view, base, k, stamp) {
     const c = CITIES[i];
     const [x, y] = lonLatToScreen(view, c.at[0], c.at[1]);
     if (x < -40 || y < -20 || x > view.width + 40 || y > view.height + 20) continue;
+    // 底部字幕带和右栏信息面板上不标城市：那里的字比地名重要
+    if (y > view.height * 0.80) continue;
+    if (x > view.width * 0.695) continue;
     // 一座城一小簇光点，按渐入进度逐簇亮起
     // 从北往南一座座亮：先沈阳，最后独山
     const appear = clamp((k * 1.5 - (i / CITIES.length) * 0.5) / 0.35, 0, 1);
@@ -661,11 +725,12 @@ function drawLiberation(ctx, view, base, k, stamp) {
 
 /* ───────────────────────── 根据地 / 箭头 / 标记 ───────────────────────── */
 
-function drawBases(ctx, view, base, year) {
+function drawBases(ctx, view, base, year, reserved = []) {
   const list = basesAt(year);
   if (!list.length) return;
   ctx.save();
   for (const b of list) {
+    // 一块根据地画成两三枚金环：暗芯 + 金边 + 一圈晕，压在红块上仍读得出来
     const pts = b.provinces
       .map((n) => base.provinceByName.get(n))
       .filter(Boolean)
@@ -673,17 +738,46 @@ function drawBases(ctx, view, base, year) {
       .filter(Boolean)
       .map(([mx, my]) => [toScreenX(view, mx), toScreenY(view, my)]);
     if (!pts.length) continue;
-    const xs = pts.map((p) => p[0]);
-    const ys = pts.map((p) => p[1]);
-    const x0 = Math.min(...xs) - 12;
-    const x1 = Math.max(...xs) + 12;
-    const y = Math.min(...ys) - 10;
-    drawBracket(ctx, x0, x1, y, { color: rgba(F.gold, 0.72), tick: 5, lineWidth: 1.4 });
-    ctx.font = '600 10px "Songti SC","Source Han Serif SC",serif';
+    pts.forEach(([x, y], i) => {
+      const r = i === 0 ? 13 : 9;
+      const halo = ctx.createRadialGradient(x, y, r * 0.6, x, y, r * 3);
+      halo.addColorStop(0, rgba(F.gold, 0.22));
+      halo.addColorStop(1, rgba(F.gold, 0));
+      ctx.fillStyle = halo;
+      ctx.beginPath();
+      ctx.arc(x, y, r * 3, 0, Math.PI * 2);
+      ctx.fill();
+
+      reserved.push([x - r, y - r, r * 2, r * 2]);
+      ctx.fillStyle = "rgba(18,26,20,0.88)";
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = rgba(F.gold, 0.92);
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = rgba(F.gold, 0.95);
+      ctx.beginPath();
+      ctx.arc(x, y, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+    });
+
+    // 名字只标一次，挂在最上面那枚环的上方
+    const top = pts.reduce((a, c) => (c[1] < a[1] ? c : a), pts[0]);
+    ctx.font = '600 10.5px "Songti SC","Source Han Serif SC",serif';
     ctx.textAlign = "center";
-    ctx.textBaseline = "top";
-    ctx.fillStyle = rgba(F.gold, 0.85);
-    ctx.fillText(b.name, (x0 + x1) / 2, y + 4);
+    ctx.textBaseline = "bottom";
+    ctx.strokeStyle = "rgba(3,7,11,0.9)";
+    ctx.lineWidth = 3;
+    ctx.lineJoin = "round";
+    const nw = ctx.measureText(b.name).width;
+    const ny = top[1] - 15;
+    reserved.push([top[0] - nw / 2 - 2, ny - 12, nw + 4, 14]);
+    ctx.strokeText(b.name, top[0], ny);
+    ctx.fillStyle = rgba(F.gold, 0.92);
+    ctx.fillText(b.name, top[0], ny);
   }
   ctx.restore();
 }
@@ -781,7 +875,7 @@ function drawArrowOn(ctx, view, arrow, progress, alpha, tint, weight = 1) {
   ctx.restore();
 }
 
-function drawMarkers(ctx, view, revealed, activeSet, player, stamp) {
+function drawMarkers(ctx, view, revealed, activeSet, player, stamp, used = []) {
   for (const e of revealed) {
     const v = valorOf(e.id);
     if (!v) continue;
@@ -806,11 +900,18 @@ function drawMarkers(ctx, view, revealed, activeSet, player, stamp) {
         ctx.font = '600 10.5px "Songti SC","Source Han Serif SC",serif';
         ctx.textAlign = "center";
         ctx.textBaseline = "bottom";
-        ctx.strokeStyle = "rgba(5,12,17,0.85)";
-        ctx.lineWidth = 3;
-        ctx.fillStyle = rgba(F.flame, 0.94);
-        ctx.strokeText(v.who, x, y - 27);
-        ctx.fillText(v.who, x, y - 27);
+        const nw = ctx.measureText(v.who).width;
+        // 名字压在城名或日签上也一样读不出：三档高度里挑一个空的，都挤就只留火苗
+        const clear = (ny) => !used.some((r) => x - nw / 2 < r[0] + r[2] && x + nw / 2 > r[0] && ny - 12 < r[1] + r[3] && ny > r[1]);
+        const ny = [y - 27, y - 40, y - 14].find(clear);
+        if (ny !== undefined) {
+          used.push([x - nw / 2 - 2, ny - 12, nw + 4, 13]);
+          ctx.strokeStyle = "rgba(5,12,17,0.85)";
+          ctx.lineWidth = 3;
+          ctx.fillStyle = rgba(F.flame, 0.94);
+          ctx.strokeText(v.who, x, ny);
+          ctx.fillText(v.who, x, ny);
+        }
         ctx.restore();
       }
     }

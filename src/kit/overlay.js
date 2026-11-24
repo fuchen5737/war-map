@@ -556,7 +556,7 @@ export function drawFallTag(ctx, x, y, text, opts = {}) {
 
 /** 照片框：没有史料照片就放一块「战区特写」——同一块版式，不伪装成影像 */
 export function drawInsetFrame(ctx, x, y, w, h, opts = {}) {
-  const { caption = "", alpha = 1, border = "rgba(220,226,232,0.55)", draw = null } = opts;
+  const { caption = "", alpha = 1, border = "rgba(220,226,232,0.55)", draw = null, sprockets = 0 } = opts;
   ctx.save();
   ctx.globalAlpha = alpha;
   // 外框留一圈黑边，像一张照片
@@ -565,6 +565,19 @@ export function drawInsetFrame(ctx, x, y, w, h, opts = {}) {
   ctx.strokeStyle = border;
   ctx.lineWidth = 1;
   ctx.strokeRect(x - 3.5, y - 3.5, w + 7, h + 7);
+
+  // 胶片齿孔：左右各一列小方块，图看起来像一格底片而不是一个空框
+  if (sprockets > 0) {
+    const sw = 4.2;
+    const sh = 6.4;
+    const gap = sh * 1.55;
+    ctx.fillStyle = "rgba(222,228,234,0.30)";
+    for (const gx of [x + sw, x + w - sw * 2]) {
+      for (let gy = y + 4; gy < y + h - sh; gy += gap) {
+        ctx.fillRect(gx, gy, sw, sh);
+      }
+    }
+  }
 
   ctx.save();
   ctx.beginPath();

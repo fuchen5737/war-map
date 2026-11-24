@@ -156,16 +156,16 @@ function goalFor(node) {
   // 战区取画面 32%，上限推到 5 倍——不够近就还是「全国图」，那是另一部片子。
   // 参考片的镜头是「一省到两省」的框，不是把战场怼满屏：
   // 太深会把占领区挤出画面，看起来就像什么都没有。
-  let want = Math.min((W * 0.55) / t.dx, (H * 0.55) / t.dy);
-  let zoom = clamp(want / sBase, 1, 3.1);
+  let want = Math.min((W * 0.46) / t.dx, (H * 0.46) / t.dy);
+  let zoom = clamp(want / sBase, 1, 3.2);
   // 并进占领区之后如果框被撑得太大（近景变成全国图），退回只框战场：
   // 那样的镜头读起来像「看全图」，而这一节讲的是某个城。
   if (merged && zoom < 2.0) {
     t = rectFor(node);
     want = Math.min((W * 0.55) / t.dx, (H * 0.55) / t.dy);
-    zoom = clamp(want / sBase, 1, 2.8);
+    zoom = clamp(want / sBase, 1, 3.2);
   }
-  const k = clamp((zoom - 1) / 1.9, 0, 1);
+  const k = clamp((zoom - 1) / 2.4, 0, 1);
   const cx0 = (minX + maxX) / 2;
   const cy0 = (minY + maxY) / 2;
   let fx = cx0 + (t.cx - cx0) * k;
