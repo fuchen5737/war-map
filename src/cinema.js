@@ -42,7 +42,7 @@ const F = {
   ink: "#eef2f5",
   gold: "#e8b45c",
   flame: "#eae4e4",
-  red: "#8f2c34",
+  red: "#96202c",
   redHi: "#ff5a2c",
 };
 
@@ -76,6 +76,12 @@ export function drawFilm(ctx, view, state) {
   drawOccupation(ctx, view, base, control, player, stamp);
   drawProvinceLines(ctx, view, base);
   const reserved = [];
+  // 窄屏时左栏（年份 + 天数 + 引文）压住左上角近半个画面，
+  // 城市名挤进去就变成一团字，先把那块地圈出来。
+  if (narrow) {
+    reserved.push([0, 0, Math.round(W * 0.62), Math.round(H * 0.52)]);
+    reserved.push([Math.round(W * 0.22), 0, W, Math.round(H * 0.15)]);
+  }
   drawBases(ctx, view, base, year, reserved);
   drawCities(ctx, view, base, t, year, reserved);
   if (moment && moment.kind === "massacre") drawMassacre(ctx, view, moment, player, stamp);
@@ -102,6 +108,15 @@ export function drawFilm(ctx, view, state) {
   ctx.fillStyle = band;
   ctx.fillRect(0, H * 0.72, W, H * 0.28);
 
+  if (narrow) {
+    // 左栏这几行字常常正落在占领区上，不垫一层就读不出来
+    const colShade = ctx.createRadialGradient(0, H * 0.14, W * 0.06, 0, H * 0.14, W * 0.86);
+    colShade.addColorStop(0, "rgba(4,8,12,0.78)");
+    colShade.addColorStop(0.55, "rgba(4,8,12,0.40)");
+    colShade.addColorStop(1, "rgba(4,8,12,0)");
+    ctx.fillStyle = colShade;
+    ctx.fillRect(0, 0, W, H * 0.62);
+  }
   drawLeftColumn(ctx, W, H, year, narrow);
   if (node) drawRightPanel(ctx, W, H, state, node, moment, t, narrow);
   drawFootNote(ctx, W, H, state, narrow);
@@ -179,7 +194,13 @@ function drawLeftColumn(ctx, W, H, year, narrow) {
 /* ───────────────────────── 右栏 ───────────────────────── */
 
 function drawRightPanel(ctx, W, H, state, node, moment, t, narrow) {
-  if (narrow) return;
+  if (narrow) {
+    // 窄屏放不下整块面板，只留标题与副题——讲的是哪一仗，比城市清单要紧
+    const x = W - Math.round(W * 0.05);
+    drawPanelTitle(ctx, x, Math.round(H * 0.055), moment ? moment.title : node.title || node.events[0].name,
+      moment ? moment.sub : subLine(node), { size: 22, subSize: 11, align: "right" });
+    return;
+  }
   const panelW = Math.round(W * 0.255);
   const x = W - panelW - Math.round(W * 0.038);
   const top = Math.round(H * 0.10);
@@ -476,6 +497,15 @@ function drawOccupation(ctx, view, base, control, player, stamp) {
       ctx.restore();
       ctx.fillStyle = g.fresh ? "rgba(112,38,45,0.95)" : "rgba(96,38,43,0.96)";
       ctx.fill("nonzero");
+      // 轮廓上再压一条亮的细线：参考片的边是一条发光的线，不是一团晕
+      ctx.save();
+      ctx.strokeStyle = g.fresh ? "rgba(255,148,96,0.92)" : "rgba(226,116,74,0.62)";
+      ctx.lineWidth = g.fresh ? 2.0 : 1.4;
+      ctx.lineJoin = "round";
+      ctx.shadowColor = g.fresh ? "rgba(255,110,60,0.9)" : "rgba(226,100,56,0.6)";
+      ctx.shadowBlur = g.fresh ? 10 : 6;
+      ctx.stroke();
+      ctx.restore();
     } else {
       // 根据地不刷红，是一块淡绿
       ctx.fillStyle = rgba(mixColor(g.color, "#000", 0.62), 0.72);
@@ -485,14 +515,15 @@ function drawOccupation(ctx, view, base, control, player, stamp) {
     // 斜线：只铺在这块里
     ctx.save();
     ctx.clip("nonzero");
-    const shade = occ ? (g.fresh ? 0.30 : 0.50) : 0.55;
-    const lineShade = occ ? (g.fresh ? 0.04 : 0.14) : 0.34;
+    // 参考片的斜纹是「暗底 + 亮线」：线比底色亮，不是更暗。
+    // 之前把线做得比底色还深，整块读起来是一张绒布，不是一层织物。
+    const shade = occ ? (g.fresh ? 0.26 : 0.40) : 0.55;
     const baseC = mixColor(g.color, "#000000", shade);
-    const lineC = mixColor(g.color, "#000000", lineShade);
+    const lineC = occ ? mixColor(g.color, "#ff5636", g.fresh ? 0.42 : 0.26) : mixColor(g.color, "#000000", 0.34);
     const pattern = hatchPattern(ctx, {
       color: rgba(lineC, 0.92),
-      period: 3.0,
-      width: 1.0,
+      period: 2.8,
+      width: 0.9,
       angle: 45,
       bg: rgba(baseC, 0.97),
       dpr,
@@ -964,6 +995,7 @@ function drawFootNote(ctx, W, H, state, narrow) {
     ctx.fillText(cap, Math.round(W * 0.42), Math.round(H * 0.845));
     ctx.restore();
   }
+  if (narrow) return;
   drawSource(ctx, W, H, "底图：现代省界简化 · 地形：AWS Terrain Tiles", {
     size: 9,
     pad: Math.round(W * 0.036),
